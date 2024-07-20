@@ -1,3 +1,4 @@
+use crate::StatusEvent;
 use anyhow::bail;
 use esp_idf_svc::{
     eth::EspEth,
@@ -8,8 +9,13 @@ use esp_idf_svc::{
     sys::{esp_netif_set_hostname, ESP_OK},
 };
 use log::info;
+use std::sync::mpsc::Sender;
 
-pub fn init<T>(sysloop: EspSystemEventLoop, eth: &'static mut EspEth<'_, T>) -> anyhow::Result<()> {
+pub fn init<T>(
+    sysloop: EspSystemEventLoop,
+    status_tx: Sender<StatusEvent>,
+    eth: &'static mut EspEth<'_, T>,
+) -> anyhow::Result<()> {
     ThreadSpawnConfiguration {
         name: Some("eth\0".as_bytes()),
         ..Default::default()
@@ -26,6 +32,9 @@ pub fn init<T>(sysloop: EspSystemEventLoop, eth: &'static mut EspEth<'_, T>) -> 
             }
 
             info!("Ethernet set up successfully");
+            status_tx
+                .send(StatusEvent::EthConnected)
+                .unwrap_or_else(|e| log::info!("Failed to send status event: {:?}", e));
 
             while eth.is_connected()? {
                 std::thread::sleep(std::time::Duration::from_secs(1));
@@ -34,6 +43,11 @@ pub fn init<T>(sysloop: EspSystemEventLoop, eth: &'static mut EspEth<'_, T>) -> 
             eth.stop()?;
             Ok(())
         }();
+
+        status_tx
+            .send(StatusEvent::EthDisconnected)
+            .unwrap_or_else(|e| log::info!("Failed to send status event: {:?}", e));
+
         if let Err(e) = loop_result {
             log::error!("Error in eth loop: {:?}", e);
         }

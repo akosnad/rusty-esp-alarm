@@ -9,6 +9,7 @@ use esp_idf_svc::{
 };
 
 mod eth;
+mod mqtt;
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -40,6 +41,9 @@ fn main() -> anyhow::Result<()> {
     //     info!("Motion: {}", motion);
     //     std::thread::sleep(std::time::Duration::from_millis(250));
     // }
+    //
+
+    let (status_tx, status_rx) = std::sync::mpsc::channel::<StatusEvent>();
 
     let eth = Box::leak(Box::new(esp_idf_svc::eth::EspEth::wrap(
         esp_idf_svc::eth::EthDriver::new_spi(
@@ -61,9 +65,41 @@ fn main() -> anyhow::Result<()> {
         )?,
     )?));
 
-    eth::init(sysloop.clone(), eth)?;
+    eth::init(sysloop.clone(), status_tx.clone(), eth)?;
 
-    log::info!("Main init done");
+    let mut eth_online = false;
+
+    while let Ok(event) = status_rx.recv() {
+        match event {
+            StatusEvent::EthConnected => {
+                eth_online = true;
+                led.set_duty(30)?;
+                mqtt::init(status_tx.clone())?;
+            }
+            StatusEvent::EthDisconnected => {
+                eth_online = false;
+                led.set_duty(0)?;
+            }
+            StatusEvent::MqttConnected => {
+                led.set_duty(100)?;
+            }
+            StatusEvent::MqttDisconnected => {
+                if eth_online {
+                    led.set_duty(30)?;
+                    mqtt::init(status_tx.clone())?;
+                } else {
+                    led.set_duty(0)?;
+                }
+            }
+        }
+    }
 
     Ok(())
+}
+
+enum StatusEvent {
+    EthConnected,
+    EthDisconnected,
+    MqttConnected,
+    MqttDisconnected,
 }
