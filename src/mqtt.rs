@@ -63,6 +63,7 @@ fn mqtt_task(
                 let event: esp_idf_svc::mqtt::client::Event<MessageImpl> = event;
 
                 match event {
+                    Event::BeforeConnect => {}
                     Event::Connected(_) => {
                         log::info!("Connected to MQTT server");
                         status_tx.send(StatusEvent::MqttConnected)?;
@@ -89,6 +90,7 @@ fn mqtt_task(
                             log::info!("Error handling mqtt message: {:?}", e);
                         });
                     }
+                    Event::Published(_) => {}
                     payload => {
                         log::warn!("Unhandled MQTT event: {:?}", payload);
                     }
