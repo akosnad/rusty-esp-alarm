@@ -3,6 +3,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 struct Config {
     mqtt_endpoint: String,
+    topic_prefix: String,
 }
 impl Config {
     fn verify(&self) -> anyhow::Result<()> {
@@ -10,7 +11,9 @@ impl Config {
             anyhow::bail!("mqtt endpoint cannot be empty");
         }
         if !self.mqtt_endpoint.starts_with("mqtt://") {
-            anyhow::bail!("mqtt endpoint must start with \"mqtt://\". no other protocols are supported yet.");
+            anyhow::bail!(
+                "mqtt endpoint must start with \"mqtt://\". no other protocols are supported yet."
+            );
         }
         Ok(())
     }
@@ -19,7 +22,7 @@ impl Config {
 macro_rules! config_entry_to_env {
     ($config:ident, $env:ident, $entry:ident) => {
         println!("cargo:rustc-env={}={}", stringify!($env), $config.$entry);
-    }
+    };
 }
 
 fn main() {
@@ -32,4 +35,5 @@ fn main() {
     config.verify().expect("config.yml validation failed");
 
     config_entry_to_env!(config, ESP_MQTT_ENDPOINT, mqtt_endpoint);
+    config_entry_to_env!(config, ESP_TOPIC_PREFIX, topic_prefix);
 }
