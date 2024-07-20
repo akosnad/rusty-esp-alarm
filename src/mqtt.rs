@@ -5,6 +5,8 @@ use esp_idf_svc::{
 };
 use std::sync::mpsc::Sender;
 
+const MQTT_ENDPOINT: &str = env!("ESP_MQTT_ENDPOINT");
+
 pub fn init(status_tx: Sender<StatusEvent>) -> anyhow::Result<()> {
     ThreadSpawnConfiguration {
         name: Some("mqtt\0".as_bytes()),
@@ -35,7 +37,7 @@ fn mqtt_task(
     config: &MqttClientConfiguration<'_>,
 ) -> anyhow::Result<()> {
     log::info!("Connecting to MQTT server...");
-    let (client, mut connection) = EspMqttClient::new("mqtt://192.168.0.194", config)?;
+    let (client, mut connection) = EspMqttClient::new(MQTT_ENDPOINT, config)?;
 
     while let Ok(event) = connection.next() {
         let payload = event.payload();
