@@ -8,17 +8,20 @@ use esp_idf_svc::{
     eth::{AsyncEth, EspEth},
     eventloop::EspSystemEventLoop,
     mqtt::client::{
-        EspMqttClient, LwtConfiguration, Message as _, MessageImpl, MqttClientConfiguration, QoS,
+        Details, EspMqttClient, InitialChunkData, LwtConfiguration, Message as _, MessageImpl,
+        MqttClientConfiguration, QoS, SubsequentChunkData,
     },
     sys::{esp_netif_set_hostname, ESP_OK},
     timer::EspTaskTimerService,
 };
+use esp_ota::OtaUpdate;
 use log::info;
 
 use crate::{spawn_task, StatusEvent};
 
 const MQTT_ENDPOINT: &str = env!("ESP_MQTT_ENDPOINT");
 const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
+const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
 
 pub fn init<T>(
     eth: &'static mut EspEth<'_, T>,
@@ -138,6 +141,7 @@ fn mqtt_task(
     let (client, mut connection) =
         EspMqttClient::new_with_conn(MQTT_ENDPOINT, &mqtt_client_config)?;
     let mut client = Some(client);
+    let mut ota = None;
 
     while let Some(msg) = connection.next() {
         match msg {
@@ -169,7 +173,7 @@ fn mqtt_task(
                         });
                 };
 
-                handle_mqtt_message(event, status_tx.clone()).unwrap_or_else(|e| {
+                handle_mqtt_message(event, status_tx.clone(), &mut ota).unwrap_or_else(|e| {
                     info!("MQTT Message handling error: {}", e);
                 })
             }
@@ -181,14 +185,87 @@ fn mqtt_task(
 
 fn handle_mqtt_message(
     event: esp_idf_svc::mqtt::client::Event<MessageImpl>,
-    status_tx: mpsc::Sender<StatusEvent>,
+    _status_tx: mpsc::Sender<StatusEvent>,
+    ota: &mut Option<OtaUpdate>,
 ) -> anyhow::Result<()> {
-    info!("MQTT Event: {:?}", event);
-
     if let esp_idf_svc::mqtt::client::Event::Received(msg) = event {
-        let content = String::from_utf8(msg.data().into())?;
-        info!("MQTT Message: {:?}", content);
-    }
+        let topic = msg.topic();
 
-    Ok(())
+        // Handle OTA messages
+        //
+        // Messages are sent in chunks, with the first message ony containing the topic.
+        // The rest of the messages contain no topic, we can only guess if it's an OTA message
+        // by checking if the OTA is in progress.
+        if topic == Some(OTA_TOPIC) || ota.is_some() {
+            return handle_ota_message(msg, ota);
+        }
+
+        let content = String::from_utf8(msg.data().into())?;
+        if let Some(topic) = topic {
+            info!("MQTT Message on topic {}: {}", topic, content);
+        } else {
+            info!("MQTT Message: {}", content);
+        }
+        Ok(())
+    } else {
+        Ok(())
+    }
+}
+
+fn handle_ota_message(msg: MessageImpl, ota: &mut Option<OtaUpdate>) -> anyhow::Result<()> {
+    let data = msg.data();
+    if let Some(mut in_progress_ota) = ota.take() {
+        match msg.details() {
+            Details::InitialChunk(_) => {
+                anyhow::bail!("Received initial OTA chunk while OTA is in progress");
+            }
+            Details::SubsequentChunk(SubsequentChunkData {
+                current_data_offset,
+                total_data_size,
+            }) => {
+                let current = current_data_offset + data.len();
+                log::info!("OTA data: {}/{}", current, total_data_size);
+                in_progress_ota
+                    .write(data)
+                    .expect("Failed to write OTA data");
+
+                if current == *total_data_size {
+                    log::info!("OTA complete, applying...");
+                    let mut completed_ota =
+                        in_progress_ota.finalize().expect("Failed to finalize OTA");
+                    if completed_ota.set_as_boot_partition().is_err() {
+                        anyhow::bail!("Failed to set OTA as boot partition");
+                    } else {
+                        completed_ota.restart();
+                    }
+                } else {
+                    ota.replace(in_progress_ota);
+                    Ok(())
+                }
+            }
+            Details::Complete => {
+                log::info!("OTA complete, applying...");
+                let mut completed_ota = in_progress_ota.finalize().expect("Failed to finalize OTA");
+                if completed_ota.set_as_boot_partition().is_err() {
+                    anyhow::bail!("Failed to set OTA as boot partition");
+                } else {
+                    completed_ota.restart();
+                }
+            }
+        }
+    } else {
+        log::info!("Starting OTA...");
+        match msg.details() {
+            Details::InitialChunk(InitialChunkData { total_data_size }) => {
+                log::info!("OTA data: 0/{}", total_data_size);
+                let mut new_ota = OtaUpdate::begin().expect("Failed to start OTA");
+                new_ota.write(data).expect("Failed to write OTA data");
+                ota.replace(new_ota);
+                Ok(())
+            }
+            _ => {
+                anyhow::bail!("Received OTA chunk without initial chunk");
+            }
+        }
+    }
 }

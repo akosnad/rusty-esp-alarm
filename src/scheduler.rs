@@ -14,7 +14,7 @@ pub struct AlarmEvent {
 
 pub fn scheduler_task(
     status_rx: Receiver<StatusEvent>,
-    status_tx: Sender<StatusEvent>,
+    _status_tx: Sender<StatusEvent>,
     alarm_event_queue: Arc<Mutex<VecDeque<AlarmEvent>>>,
 ) -> ! {
     let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
@@ -67,6 +67,8 @@ fn init_mqtt(
     entities: &[HAEntity],
 ) -> anyhow::Result<()> {
     const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
+    const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
+
     // send entity config messages
     for entity in entities.iter() {
         let entity = HAEntity {
@@ -82,12 +84,16 @@ fn init_mqtt(
             "{}/{}/{}/config",
             "homeassistant", entity.variant, entity.unique_id
         );
-        let payload = serde_json::to_string(&entity).unwrap();
+        let entity_out: HAEntityOut = entity.into();
+        let payload = serde_json::to_string(&entity_out).unwrap();
         client.publish(&topic, QoS::AtLeastOnce, true, payload.as_bytes())?;
     }
 
     // birth message
     client.publish(AVAILABILITY_TOPIC, QoS::AtLeastOnce, true, b"online")?;
+
+    // subscribe to ota
+    client.subscribe(OTA_TOPIC, QoS::ExactlyOnce)?;
 
     Ok(())
 }

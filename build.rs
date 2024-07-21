@@ -6,6 +6,7 @@ struct Config {
     mqtt_endpoint: String,
     entities: Vec<HAEntity>,
     availability_topic: String,
+    ota_topic: String,
 }
 
 impl Config {
@@ -51,6 +52,7 @@ fn main() {
 
     config_entry_to_env!(config, ESP_MQTT_ENDPOINT, mqtt_endpoint);
     config_entry_to_env!(config, ESP_AVAILABILITY_TOPIC, availability_topic);
+    config_entry_to_env!(config, ESP_OTA_TOPIC, ota_topic);
 
     uneval::to_out_dir(config.entities, "entities.rs").expect("Failed to write entities.rs");
 }

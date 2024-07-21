@@ -37,6 +37,8 @@
               python3Packages.virtualenv
 
               rust-analyzer
+
+              mosquitto
             ];
           };
         in
