@@ -6,6 +6,6 @@ if [ -z "${1}" ]; then
     exit 1
 fi
 
-cargo build --release
-espflash save-image --chip esp32 target/xtensa-esp32-espidf/release/rusty-esp-alarm ota.bin
+cargo build
+espflash save-image --chip esp32 target/xtensa-esp32-espidf/debug/rusty-esp-alarm ota.bin
 mosquitto_pub -L "${1}" -f ota.bin -d -q 2
