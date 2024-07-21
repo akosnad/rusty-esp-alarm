@@ -1,15 +1,55 @@
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    hal::{
-        ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver},
-        peripherals::Peripherals,
-        prelude::*,
-        spi,
+use std::{
+    collections::VecDeque,
+    sync::{
+        mpsc::{self},
+        Arc,
     },
+    thread::JoinHandle,
 };
 
-mod eth;
-mod mqtt;
+use esp_idf_hal::{
+    cpu::Core,
+    ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver},
+    peripherals::Peripherals,
+    prelude::*,
+    task::thread::ThreadSpawnConfiguration,
+};
+use esp_idf_svc::hal::spi::Dma;
+use esp_idf_svc::hal::spi::SpiDriver;
+use esp_idf_svc::hal::spi::SpiDriverConfig;
+
+use esp_idf_svc::{
+    eventloop::EspSystemEventLoop,
+    mqtt::client::{ConnState, MessageImpl},
+    timer::EspTaskTimerService,
+};
+use esp_idf_sys::{esp_restart, EspError};
+use log::{error, info};
+
+mod network;
+mod scheduler;
+
+/// Helper which spawns a task with a name
+fn spawn_task(
+    task: impl FnOnce() + Send + 'static,
+    task_name: &'static str,
+    pin_to_core: Option<Core>,
+) -> anyhow::Result<JoinHandle<()>> {
+    info!("spawning task: {}", task_name);
+
+    ThreadSpawnConfiguration {
+        name: Some(task_name.as_bytes()),
+        pin_to_core,
+        ..Default::default()
+    }
+    .set()?;
+
+    let handle = std::thread::Builder::new().stack_size(4096).spawn(task)?;
+
+    info!("spawned task: {}", task_name);
+
+    Ok(handle)
+}
 
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -22,6 +62,7 @@ fn main() -> anyhow::Result<()> {
     let peripherals = Peripherals::take()?;
     let pins = peripherals.pins;
     let sysloop = EspSystemEventLoop::take()?;
+    let timer = EspTaskTimerService::new()?;
 
     let led = {
         let timer = LedcTimerDriver::new(
@@ -33,6 +74,26 @@ fn main() -> anyhow::Result<()> {
     };
     led.set_duty(0)?;
 
+    let eth = Box::leak(Box::new(esp_idf_svc::eth::EspEth::wrap(
+        esp_idf_svc::eth::EthDriver::new_spi(
+            SpiDriver::new(
+                peripherals.spi2,
+                pins.gpio18,
+                pins.gpio19,
+                Some(pins.gpio23),
+                &SpiDriverConfig::new().dma(Dma::Auto(4096)),
+            )?,
+            pins.gpio26,
+            Some(pins.gpio5),
+            Some(pins.gpio33),
+            esp_idf_svc::eth::SpiEthChipset::W5500,
+            20.MHz().into(),
+            Some(&[0x02, 0x00, 0x00, 0xfc, 0x18, 0x01]),
+            None,
+            sysloop.clone(),
+        )?,
+    )?));
+
     // let mut pin_driver = esp_idf_svc::hal::gpio::PinDriver::input(pins.gpio4)?;
     // pin_driver.set_pull(esp_idf_svc::hal::gpio::Pull::Up)?;
 
@@ -42,64 +103,46 @@ fn main() -> anyhow::Result<()> {
     //     std::thread::sleep(std::time::Duration::from_millis(250));
     // }
     //
+    //
 
-    let (status_tx, status_rx) = std::sync::mpsc::channel::<StatusEvent>();
+    let mut tasks = Vec::new();
+    let alarm_event_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
 
-    let eth = Box::leak(Box::new(esp_idf_svc::eth::EspEth::wrap(
-        esp_idf_svc::eth::EthDriver::new_spi(
-            spi::SpiDriver::new(
-                peripherals.spi2,
-                pins.gpio18,
-                pins.gpio19,
-                Some(pins.gpio23),
-                &spi::SpiDriverConfig::new().dma(spi::Dma::Auto(4096)),
-            )?,
-            pins.gpio26,
-            Some(pins.gpio5),
-            Some(pins.gpio33),
-            esp_idf_svc::eth::SpiEthChipset::W5500,
-            20.MHz().into(),
-            Some(&[0x02, 0x00, 0x00, 0x12, 0x34, 0x56]),
-            None,
-            sysloop.clone(),
-        )?,
-    )?));
+    // Scheduler task
+    let (status_tx, status_rx) = mpsc::channel::<StatusEvent>();
+    let status_tx_scheduler = status_tx.clone();
+    let alarm_event_queue_scheduler = alarm_event_queue.clone();
+    info!("Starting Scheduler...");
+    tasks.push(spawn_task(
+        move || {
+            scheduler::scheduler_task(status_rx, status_tx_scheduler, alarm_event_queue_scheduler);
+        },
+        "scheduler\0",
+        Some(Core::Core0),
+    )?);
 
-    eth::init(sysloop.clone(), status_tx.clone(), eth)?;
+    // Network stack
+    info!("Starting network stack...");
+    network::init(eth, sysloop.clone(), timer, status_tx.clone(), &mut tasks)?;
 
-    let mut eth_online = false;
-
-    while let Ok(event) = status_rx.recv() {
-        match event {
-            StatusEvent::EthConnected => {
-                eth_online = true;
-                led.set_duty(30)?;
-                mqtt::init(status_tx.clone())?;
-            }
-            StatusEvent::EthDisconnected => {
-                eth_online = false;
-                led.set_duty(0)?;
-            }
-            StatusEvent::MqttConnected => {
-                led.set_duty(100)?;
-            }
-            StatusEvent::MqttDisconnected => {
-                if eth_online {
-                    led.set_duty(30)?;
-                    mqtt::init(status_tx.clone())?;
-                } else {
-                    led.set_duty(0)?;
-                }
-            }
-        }
+    // Wait for tasks to exit
+    for task in tasks {
+        task.join().unwrap();
     }
 
-    Ok(())
+    error!("All tasks have exited, restarting...");
+
+    unsafe {
+        esp_restart();
+    }
 }
 
 enum StatusEvent {
     EthConnected,
     EthDisconnected,
-    MqttConnected,
+    MqttConnected(
+        esp_idf_svc::mqtt::client::EspMqttClient<'static, ConnState<MessageImpl, EspError>>,
+    ),
+    MqttReconnected,
     MqttDisconnected,
 }
