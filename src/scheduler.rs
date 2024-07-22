@@ -1,4 +1,6 @@
+use crate::AlarmCommand;
 use crate::AlarmEvent;
+use crate::AlarmState;
 use crate::StatusEvent;
 use esp_idf_svc::mqtt::client::{ConnState, EspMqttClient, MessageImpl, QoS};
 use esp_idf_sys::EspError;
@@ -12,7 +14,17 @@ pub fn scheduler_task(
     status_rx: Receiver<StatusEvent>,
     _status_tx: Sender<StatusEvent>,
     alarm_event_queue: Arc<Mutex<VecDeque<AlarmEvent>>>,
+    alarm_command_tx: Sender<AlarmCommand>,
 ) -> ! {
+    let alarm_entity = entities
+        .iter()
+        .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
+        .expect("Alarm entity not found")
+        .clone();
+    let alarm_entity_command_topic = alarm_entity
+        .command_topic
+        .expect("Alarm entity has no command topic");
+
     let mut mqtt_client = None;
     loop {
         let loop_result = || -> anyhow::Result<()> {
@@ -42,6 +54,11 @@ pub fn scheduler_task(
                         StatusEvent::MqttDisconnected => {
                             log::info!("MqttDisconnected");
                         }
+                        StatusEvent::MqttMessage(msg) => {
+                            if msg.topic == alarm_entity_command_topic {
+                                handle_alarm_command(&msg.payload, &alarm_command_tx)?;
+                            }
+                        }
                     },
                     Err(e) => {
                         if e == std::sync::mpsc::TryRecvError::Disconnected {
@@ -60,6 +77,9 @@ pub fn scheduler_task(
                                 }
                                 AlarmEvent::MotionCleared(entity) => {
                                     send_binary_sensor_state(false, &entity, &mut client)?;
+                                }
+                                AlarmEvent::AlarmStateChanged((entity, state)) => {
+                                    send_alarm_state_change(&state, &entity, &mut client)?;
                                 }
                             },
                             None => {
@@ -115,6 +135,10 @@ fn init_mqtt(
         let entity_out: HAEntityOut = entity.into();
         let payload = serde_json::to_string(&entity_out).unwrap();
         client.publish(&topic, QoS::AtLeastOnce, true, payload.as_bytes())?;
+
+        if let Some(command_topic) = entity_out.command_topic {
+            client.subscribe(&command_topic, QoS::ExactlyOnce)?;
+        }
     }
 
     // birth message
@@ -138,5 +162,42 @@ fn send_binary_sensor_state(
         true,
         payload.as_bytes(),
     )?;
+    Ok(())
+}
+
+fn send_alarm_state_change(
+    state: &AlarmState,
+    entity: &HAEntity,
+    client: &mut EspMqttClient<'_, ConnState<MessageImpl, EspError>>,
+) -> anyhow::Result<()> {
+    let payload = match state {
+        AlarmState::Disarmed => "disarmed",
+        AlarmState::Arming(_) => "arming",
+        AlarmState::Armed(_) => "armed_away",
+        AlarmState::Triggered => "triggered",
+    };
+    client.publish(
+        &entity.state_topic,
+        QoS::AtLeastOnce,
+        true,
+        payload.as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn handle_alarm_command(
+    payload: &str,
+    alarm_command_tx: &Sender<AlarmCommand>,
+) -> anyhow::Result<()> {
+    let command = match payload {
+        "ARM_AWAY" => AlarmCommand::Arm,
+        "DISARM" => AlarmCommand::Disarm,
+        "TRIGGER" => AlarmCommand::ManualTrigger,
+        _ => {
+            log::warn!("Unknown command: {}", payload);
+            return Ok(());
+        }
+    };
+    alarm_command_tx.send(command)?;
     Ok(())
 }

@@ -35,7 +35,7 @@ mod alarm;
 mod network;
 mod scheduler;
 
-use alarm::AlarmEvent;
+use alarm::{AlarmCommand, AlarmEvent, AlarmState};
 
 /// Helper which spawns a task with a name
 fn spawn_task(
@@ -127,6 +127,7 @@ fn main() -> anyhow::Result<()> {
     let alarm_event_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
 
     // Alarm task
+    let (alarm_command_tx, alarm_command_rx) = mpsc::channel::<alarm::AlarmCommand>();
     let _alarm_event_queue = alarm_event_queue.clone();
     let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
     let mut motion_entites = entities
@@ -139,11 +140,11 @@ fn main() -> anyhow::Result<()> {
                 // the alarm task throughout the lifetime of the program.
                 Some(pin) => unsafe {
                     let pin: Option<AnyIOPin> = gpio_pin_num_to_peripheral!(pin, pins, 0, 2)
-                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 3, 5))
-                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 6, 18))
-                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 21, 23))
-                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 25, 26))
-                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 32, 33));
+                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 3, 5))
+                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 6, 18))
+                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 21, 23))
+                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 25, 26))
+                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 32, 33));
                     pin.expect("Invalid GPIO pin provided")
                 },
                 None => return None,
@@ -160,9 +161,20 @@ fn main() -> anyhow::Result<()> {
             })
         })
         .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
+    let alarm_entity = entities
+        .iter()
+        .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
+        .expect("Alarm entity not found")
+        .clone();
     tasks.push(spawn_task(
         move || {
-            alarm::alarm_task(_alarm_event_queue, nvs, &mut motion_entites);
+            alarm::alarm_task(
+                _alarm_event_queue,
+                alarm_command_rx,
+                nvs,
+                &mut motion_entites,
+                alarm_entity,
+            );
         },
         "alarm\0",
         Some(Core::Core1),
@@ -171,6 +183,7 @@ fn main() -> anyhow::Result<()> {
     // Scheduler task
     let (status_tx, status_rx) = mpsc::channel::<StatusEvent>();
     let status_tx_scheduler = status_tx.clone();
+    let alarm_command_tx_scheduler = alarm_command_tx.clone();
     let alarm_event_queue_scheduler = alarm_event_queue.clone();
     tasks.push(spawn_task(
         move || {
@@ -179,6 +192,7 @@ fn main() -> anyhow::Result<()> {
                 status_rx,
                 status_tx_scheduler,
                 alarm_event_queue_scheduler,
+                alarm_command_tx_scheduler,
             );
         },
         "scheduler\0",
@@ -208,4 +222,11 @@ enum StatusEvent {
     ),
     MqttReconnected,
     MqttDisconnected,
+    MqttMessage(MqttMessage),
+}
+
+#[derive(Debug, Clone)]
+struct MqttMessage {
+    topic: String,
+    payload: String,
 }

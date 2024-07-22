@@ -13,6 +13,7 @@ pub struct HAEntity {
     pub device_class: Option<String>,
     pub entity_category: Option<String>,
     pub gpio_pin: Option<u8>,
+    pub command_topic: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -30,19 +31,32 @@ pub struct HAEntityOut {
     pub device_class: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_category: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_arm_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_disarm_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_trigger_required: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command_topic: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supported_features: Option<Vec<String>>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum HAEntityVariant {
     binary_sensor,
     sensor,
+    alarm_control_panel,
 }
 impl std::fmt::Display for HAEntityVariant {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             HAEntityVariant::binary_sensor => write!(f, "binary_sensor"),
             HAEntityVariant::sensor => write!(f, "sensor"),
+            HAEntityVariant::alarm_control_panel => write!(f, "alarm_control_panel"),
         }
     }
 }
@@ -106,15 +120,38 @@ pub struct HADeviceOut {
 
 impl From<HAEntity> for HAEntityOut {
     fn from(entity: HAEntity) -> Self {
-        HAEntityOut {
-            name: entity.name,
-            unique_id: entity.unique_id,
-            state_topic: entity.state_topic,
-            icon: entity.icon,
-            availability: entity.availability.map(|a| a.into()),
-            device: entity.device.map(|d| d.into()),
-            device_class: entity.device_class,
-            entity_category: entity.entity_category,
+        if entity.variant == HAEntityVariant::alarm_control_panel {
+            HAEntityOut {
+                name: entity.name,
+                unique_id: entity.unique_id,
+                state_topic: entity.state_topic,
+                command_topic: entity.command_topic,
+                icon: entity.icon,
+                availability: entity.availability.map(|a| a.into()),
+                device: entity.device.map(|d| d.into()),
+                device_class: entity.device_class,
+                entity_category: entity.entity_category,
+                code_arm_required: Some(false),
+                code_disarm_required: Some(false),
+                code_trigger_required: Some(false),
+                supported_features: Some(vec!["arm_away".to_string(), "trigger".to_string()]),
+            }
+        } else {
+            HAEntityOut {
+                name: entity.name,
+                unique_id: entity.unique_id,
+                state_topic: entity.state_topic,
+                command_topic: None,
+                icon: entity.icon,
+                availability: entity.availability.map(|a| a.into()),
+                device: entity.device.map(|d| d.into()),
+                device_class: entity.device_class,
+                entity_category: entity.entity_category,
+                code_arm_required: None,
+                code_disarm_required: None,
+                code_trigger_required: None,
+                supported_features: None,
+            }
         }
     }
 }

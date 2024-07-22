@@ -185,7 +185,7 @@ fn mqtt_task(
 
 fn handle_mqtt_message(
     event: esp_idf_svc::mqtt::client::Event<MessageImpl>,
-    _status_tx: mpsc::Sender<StatusEvent>,
+    status_tx: mpsc::Sender<StatusEvent>,
     ota: &mut Option<OtaUpdate>,
 ) -> anyhow::Result<()> {
     if let esp_idf_svc::mqtt::client::Event::Received(msg) = event {
@@ -203,6 +203,12 @@ fn handle_mqtt_message(
         let content = String::from_utf8(msg.data().into())?;
         if let Some(topic) = topic {
             info!("MQTT Message on topic {}: {}", topic, content);
+            status_tx
+                .send(StatusEvent::MqttMessage(crate::MqttMessage {
+                    topic: String::from(topic),
+                    payload: content,
+                }))
+                .expect("Failed to send status event");
         } else {
             info!("MQTT Message: {}", content);
         }
