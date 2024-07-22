@@ -29,6 +29,7 @@ use esp_idf_svc::{
 use esp_idf_sys::{esp_restart, EspError};
 use ha_types::*;
 use log::{error, info};
+use seq_macro::seq;
 
 mod alarm;
 mod network;
@@ -56,6 +57,17 @@ fn spawn_task(
     info!("spawned task: {}", task_name);
 
     Ok(handle)
+}
+
+macro_rules! gpio_pin_num_to_peripheral {
+    ($pin:expr, $pins:ident, $from:expr, $to:expr) => { seq!(N in $from..$to {
+        match $pin {
+            #(
+                N => Some($pins.gpio~N.clone_unchecked().into()),
+            )*
+                _ => None,
+        }
+    })};
 }
 
 fn main() -> anyhow::Result<()> {
@@ -117,7 +129,7 @@ fn main() -> anyhow::Result<()> {
     // Alarm task
     let _alarm_event_queue = alarm_event_queue.clone();
     let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
-    let mut entities_alarm = entities
+    let mut motion_entites = entities
         .clone()
         .into_iter()
         .filter_map(|entity| {
@@ -126,16 +138,13 @@ fn main() -> anyhow::Result<()> {
                 // we guarantee that the offending GPIO pins are only used by
                 // the alarm task throughout the lifetime of the program.
                 Some(pin) => unsafe {
-                    let pin: AnyIOPin = match pin {
-                        // TODO: use a macro to generate match arms
-                        0 => pins.gpio0.clone_unchecked().into(),
-                        4 => pins.gpio4.clone_unchecked().into(),
-                        12 => pins.gpio12.clone_unchecked().into(),
-                        32 => pins.gpio32.clone_unchecked().into(),
-                        25 => pins.gpio25.clone_unchecked().into(),
-                        _ => panic!("Invalid GPIO pin number provided: {}", pin),
-                    };
-                    pin
+                    let pin: Option<AnyIOPin> = gpio_pin_num_to_peripheral!(pin, pins, 0, 2)
+                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 3, 5))
+                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 6, 18))
+                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 21, 23))
+                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 25, 26))
+                            .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 32, 33));
+                    pin.expect("Invalid GPIO pin provided")
                 },
                 None => return None,
             };
@@ -144,16 +153,16 @@ fn main() -> anyhow::Result<()> {
                 .set_pull(esp_idf_svc::hal::gpio::Pull::Up)
                 .unwrap();
 
-            Some(alarm::AlarmEntity {
+            Some(alarm::AlarmMotionEntity {
                 entity,
                 pin_driver,
                 motion: false,
             })
         })
-        .collect::<Vec<alarm::AlarmEntity<_, _>>>();
+        .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
     tasks.push(spawn_task(
         move || {
-            alarm::alarm_task(_alarm_event_queue, nvs, &mut entities_alarm);
+            alarm::alarm_task(_alarm_event_queue, nvs, &mut motion_entites);
         },
         "alarm\0",
         Some(Core::Core1),

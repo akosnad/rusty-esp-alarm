@@ -7,7 +7,7 @@ pub enum AlarmEvent {
     MotionCleared(HAEntity),
 }
 
-pub struct AlarmEntity<'a, T, MODE>
+pub struct AlarmMotionEntity<'a, T, MODE>
 where
     T: InputPin + OutputPin,
     MODE: InputMode,
@@ -20,16 +20,21 @@ where
 pub fn alarm_task<T, MODE>(
     event_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<AlarmEvent>>>,
     _nvs_default_partition: EspDefaultNvsPartition,
-    entities: &mut [AlarmEntity<T, MODE>],
+    motion_entities: &mut [AlarmMotionEntity<T, MODE>],
 ) -> !
 where
     T: InputPin + OutputPin,
     MODE: InputMode,
 {
+    // TODO: state persistence with NVS
     //let nvs = EspNvs::new(nvs_default_partition, "alarm", true).unwrap();
 
+    // FIXME: a VecDeque is not suitable for emitting alarm events.
+    // We need a more sophisticated data structure that can handle
+    // only emitting the latest motion detected event for a given entity.
+
     loop {
-        for e in entities.iter_mut() {
+        for e in motion_entities.iter_mut() {
             let motion = e.pin_driver.is_high();
             if motion == e.motion {
                 continue;
