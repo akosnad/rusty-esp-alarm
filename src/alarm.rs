@@ -4,6 +4,7 @@ use ha_types::*;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+#[derive(Debug)]
 pub enum AlarmEvent {
     MotionDetected(HAEntity),
     MotionCleared(HAEntity),
@@ -52,7 +53,6 @@ where
 
     // TODO: make these configurable
     const ARMING_TIMEOUT: Duration = Duration::from_secs(30);
-    const TRIGGER_AFTER_ARM_THRESHOLD: Duration = Duration::from_secs(5);
 
     // FIXME: a VecDeque is not suitable for emitting alarm events.
     // We need a more sophisticated data structure that can handle
@@ -109,8 +109,8 @@ where
                     alarm_state = AlarmState::Armed(Instant::now());
                 }
             }
-            AlarmState::Armed(start) => {
-                if start.elapsed() >= TRIGGER_AFTER_ARM_THRESHOLD && motion_detected {
+            AlarmState::Armed(_start) => {
+                if motion_detected {
                     alarm_state = AlarmState::Triggered;
                 }
             }

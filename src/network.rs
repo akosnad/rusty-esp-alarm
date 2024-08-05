@@ -193,9 +193,10 @@ fn handle_mqtt_message(
 
         // Handle OTA messages
         //
-        // Messages are sent in chunks, with the first message ony containing the topic.
-        // The rest of the messages contain no topic, we can only guess if it's an OTA message
-        // by checking if the OTA is in progress.
+        // Messages are sent in chunks, with only the first message containing the topic.
+        // Subsequent messages (we assume they are subsequent, this depends on how esp_idf_svc
+        // handles them) contain no topic. We can only guess if it's an OTA message by checking if
+        // the OTA is in progress.
         if topic == Some(OTA_TOPIC) || ota.is_some() {
             return handle_ota_message(msg, ota);
         }

@@ -1,6 +1,6 @@
 use serde::{Serialize, Deserialize};
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HAEntity {
     pub name: String,
     pub variant: HAEntityVariant,
@@ -16,7 +16,7 @@ pub struct HAEntity {
     pub command_topic: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HAEntityOut {
     pub name: String,
     pub unique_id: String,
@@ -44,7 +44,7 @@ pub struct HAEntityOut {
     pub supported_features: Option<Vec<String>>,
 }
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[allow(non_camel_case_types)]
 pub enum HAEntityVariant {
     binary_sensor,
@@ -61,7 +61,7 @@ impl std::fmt::Display for HAEntityVariant {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HADeviceAvailability {
     pub payload_available: Option<String>,
     pub payload_not_available: Option<String>,
@@ -69,7 +69,7 @@ pub struct HADeviceAvailability {
     pub value_template: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HADeviceAvailabilityOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub payload_available: Option<String>,
@@ -80,7 +80,7 @@ pub struct HADeviceAvailabilityOut {
     pub value_template: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HADevice {
     pub configuration_url: Option<String>,
     pub hw_version: Option<String>,
@@ -94,7 +94,7 @@ pub struct HADevice {
     pub via_device: Option<String>,
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HADeviceOut {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub configuration_url: Option<String>,

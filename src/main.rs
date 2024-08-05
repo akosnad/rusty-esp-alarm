@@ -52,7 +52,7 @@ fn spawn_task(
     }
     .set()?;
 
-    let handle = std::thread::Builder::new().stack_size(4096).spawn(task)?;
+    let handle = std::thread::Builder::new().stack_size(8192).spawn(task)?;
 
     info!("spawned task: {}", task_name);
 
@@ -70,6 +70,7 @@ macro_rules! gpio_pin_num_to_peripheral {
     })};
 }
 
+#[allow(unreachable_code)]
 fn main() -> anyhow::Result<()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -77,6 +78,11 @@ fn main() -> anyhow::Result<()> {
 
     // Bind the log crate to the ESP Logging facilities
     esp_idf_svc::log::EspLogger::initialize_default();
+
+    #[cfg(feature = "simulation")]
+    {
+        return simulation();
+    }
 
     let peripherals = Peripherals::take()?;
     let mut pins = peripherals.pins;
@@ -229,4 +235,91 @@ enum StatusEvent {
 struct MqttMessage {
     topic: String,
     payload: String,
+}
+
+#[cfg(feature = "simulation")]
+fn simulation() -> anyhow::Result<()> {
+    use std::sync::mpsc::channel;
+    use std::thread;
+
+    let peripherals = Peripherals::take()?;
+    let mut pins = peripherals.pins;
+    let nvs = EspDefaultNvsPartition::take()?;
+
+    let (alarm_command_tx, alarm_command_rx) = channel();
+
+    // generate some alarm commands
+    spawn_task(
+        move || loop {
+            thread::sleep(std::time::Duration::from_secs(5));
+            alarm_command_tx.send(AlarmCommand::Arm).unwrap();
+            thread::sleep(std::time::Duration::from_secs(20));
+            alarm_command_tx.send(AlarmCommand::Disarm).unwrap();
+        },
+        "alarm_command_generator\0",
+        None,
+    )?;
+
+    let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
+    let alarm_entity = entities
+        .iter()
+        .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
+        .expect("Alarm entity not found")
+        .clone();
+    let mut motion_entites = entities
+        .clone()
+        .into_iter()
+        .filter_map(|entity| {
+            let pin: Option<AnyIOPin> = unsafe {
+                match entity.gpio_pin {
+                    Some(pin) => match pin {
+                        0 => Some(pins.gpio0.clone_unchecked().into()),
+                        _ => None,
+                    },
+                    None => None,
+                }
+            };
+            if pin.is_none() {
+                return None;
+            }
+
+            let mut pin_driver = PinDriver::input(pin.unwrap()).unwrap();
+            pin_driver
+                .set_pull(esp_idf_svc::hal::gpio::Pull::Up)
+                .unwrap();
+
+            Some(alarm::AlarmMotionEntity {
+                entity,
+                pin_driver,
+                motion: false,
+            })
+        })
+        .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
+
+    let queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+
+    let alarm_event_queue = queue.clone();
+    spawn_task(
+        move || {
+            alarm::alarm_task(
+                alarm_event_queue,
+                alarm_command_rx,
+                nvs,
+                &mut motion_entites,
+                alarm_entity,
+            );
+        },
+        "alarm\0",
+        Some(Core::Core1),
+    )?;
+
+    loop {
+        // empty the queue
+        if let Ok(mut queue) = queue.try_lock() {
+            if let Some(event) = queue.pop_front() {
+                println!("Popped alarm event: {:?}", event);
+            }
+        }
+        thread::sleep(std::time::Duration::from_secs(1));
+    }
 }
