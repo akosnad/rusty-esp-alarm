@@ -36,5 +36,28 @@ jobs:
           ldproxy: true
       - name: Enable caching
         uses: Swatinem/rust-cache@v2
+      - name: Create dummy config.yml
+        run: |
+          cat << EOF > config.yml
+          mqtt_endpoint: mqtt://nowhere.arpa
+          availability_topic: none
+          ota_topic: none
+          entities:
+            - name: Dummy alarm
+              variant: alarm_control_panel
+              unique_id: dummy_alarm_control
+              state_topic: dummy_alarm/state
+              command_topic: dummy_alarm/command
+              device: &device
+                identifiers: ["dummy_alarm"]
+                name: Dummy Alarm
+            - name: Dummy Hall motion
+              variant: binary_sensor
+              unique_id: hall_motion
+              state_topic: dummy_alarm/hall_motion
+              device: *device
+              icon: mdi:walk
+              gpio_pin: 0
+          EOF
       - name: Run command
         run: cargo ${{ matrix.action.command }} ${{ matrix.action.args }}
