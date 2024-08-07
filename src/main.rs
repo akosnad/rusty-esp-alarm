@@ -135,6 +135,11 @@ fn main() -> anyhow::Result<()> {
     // Alarm task
     let (alarm_command_tx, alarm_command_rx) = mpsc::channel::<alarm::AlarmCommand>();
     let _alarm_event_queue = alarm_event_queue.clone();
+
+    // TODO: make siren a configurable entity
+    let mut siren_pin = PinDriver::output(pins.gpio27)?;
+    siren_pin.set_low()?;
+
     let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
     let mut motion_entites = entities
         .clone()
@@ -167,11 +172,13 @@ fn main() -> anyhow::Result<()> {
             })
         })
         .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
+
     let alarm_entity = entities
         .iter()
         .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
         .expect("Alarm entity not found")
         .clone();
+
     tasks.push(spawn_task(
         move || {
             alarm::alarm_task(
@@ -180,6 +187,7 @@ fn main() -> anyhow::Result<()> {
                 nvs,
                 &mut motion_entites,
                 alarm_entity,
+                siren_pin,
             );
         },
         "alarm\0",

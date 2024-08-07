@@ -174,6 +174,7 @@ fn send_alarm_state_change(
         AlarmState::Disarmed => "disarmed",
         AlarmState::Arming(_) => "arming",
         AlarmState::Armed(_) => "armed_away",
+        AlarmState::Pending(_) => "pending",
         AlarmState::Triggered => "triggered",
     };
     client.publish(
@@ -193,6 +194,7 @@ fn handle_alarm_command(
         "ARM_AWAY" => AlarmCommand::Arm,
         "DISARM" => AlarmCommand::Disarm,
         "TRIGGER" => AlarmCommand::ManualTrigger,
+        "UNTRIGGER" => AlarmCommand::Untrigger,
         _ => {
             log::warn!("Unknown command: {}", payload);
             return Ok(());

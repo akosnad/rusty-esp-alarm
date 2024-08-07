@@ -1,4 +1,4 @@
-use esp_idf_hal::gpio::{InputMode, InputPin, OutputPin, PinDriver};
+use esp_idf_hal::gpio::{InputMode, InputPin, Output, OutputPin, PinDriver};
 use esp_idf_svc::nvs::*;
 use ha_types::*;
 use std::sync::mpsc::Receiver;
@@ -26,6 +26,7 @@ pub enum AlarmState {
     Disarmed,
     Arming(Instant),
     Armed(Instant),
+    Pending(Instant),
     Triggered,
 }
 
@@ -34,6 +35,7 @@ pub enum AlarmCommand {
     Arm,
     Disarm,
     ManualTrigger,
+    Untrigger,
 }
 
 pub fn alarm_task<T, MODE>(
@@ -42,6 +44,7 @@ pub fn alarm_task<T, MODE>(
     _nvs_default_partition: EspDefaultNvsPartition,
     motion_entities: &mut [AlarmMotionEntity<T, MODE>],
     alarm_entity: HAEntity,
+    mut siren_pin: PinDriver<impl OutputPin, Output>,
 ) -> !
 where
     T: InputPin + OutputPin,
@@ -53,6 +56,7 @@ where
 
     // TODO: make these configurable
     const ARMING_TIMEOUT: Duration = Duration::from_secs(30);
+    const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 
     // FIXME: a VecDeque is not suitable for emitting alarm events.
     // We need a more sophisticated data structure that can handle
@@ -94,6 +98,12 @@ where
                         alarm_state = AlarmState::Triggered;
                     }
                 }
+                AlarmCommand::Untrigger => match alarm_state {
+                    AlarmState::Triggered | AlarmState::Pending(_) => {
+                        alarm_state = AlarmState::Armed(Instant::now());
+                    }
+                    _ => {}
+                },
             },
             Err(e) => {
                 if e == std::sync::mpsc::TryRecvError::Disconnected {
@@ -111,14 +121,30 @@ where
             }
             AlarmState::Armed(_start) => {
                 if motion_detected {
+                    alarm_state = AlarmState::Pending(Instant::now());
+                }
+            }
+            AlarmState::Pending(start) => {
+                if start.elapsed() >= PENDING_TIMEOUT {
                     alarm_state = AlarmState::Triggered;
                 }
             }
-            AlarmState::Triggered => {}
+            AlarmState::Triggered => {
+                siren_pin.set_high().unwrap_or_else(|e| {
+                    log::error!("Failed to set siren pin high: {:?}", e);
+                });
+            }
         }
 
         if last_state != alarm_state {
             log::info!("Alarm state changed: {:?}", alarm_state);
+
+            if last_state == AlarmState::Triggered {
+                siren_pin.set_low().unwrap_or_else(|e| {
+                    log::error!("Failed to set siren pin low: {:?}", e);
+                });
+            }
+
             let mut queue = event_queue.lock().unwrap();
             queue.push_back(AlarmEvent::AlarmStateChanged((
                 alarm_entity.clone(),
