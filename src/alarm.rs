@@ -56,7 +56,7 @@ where
     let mut alarm_state = AlarmState::Disarmed;
 
     // TODO: make these configurable
-    const ARMING_TIMEOUT: Duration = Duration::from_secs(30);
+    const ARMING_TIMEOUT: Duration = Duration::from_secs(90);
     const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 
     // FIXME: a VecDeque is not suitable for emitting alarm events.
