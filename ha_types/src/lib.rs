@@ -134,7 +134,11 @@ impl From<HAEntity> for HAEntityOut {
                 code_arm_required: Some(false),
                 code_disarm_required: Some(false),
                 code_trigger_required: Some(false),
-                supported_features: Some(vec!["arm_away".to_string(), "trigger".to_string(), "arm_custom_bypass".to_string()]),
+                supported_features: Some(vec![
+                    "arm_away".to_string(),
+                    "trigger".to_string(),
+                    "arm_custom_bypass".to_string(),
+                ]),
             }
         } else {
             HAEntityOut {
