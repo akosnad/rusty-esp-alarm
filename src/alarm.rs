@@ -33,6 +33,7 @@ pub enum AlarmState {
 #[derive(Clone, PartialEq)]
 pub enum AlarmCommand {
     Arm,
+    ArmInstantly,
     Disarm,
     ManualTrigger,
     Untrigger,
@@ -88,6 +89,11 @@ where
                 AlarmCommand::Arm => {
                     if alarm_state == AlarmState::Disarmed {
                         alarm_state = AlarmState::Arming(Instant::now());
+                    }
+                }
+                AlarmCommand::ArmInstantly => {
+                    if alarm_state == AlarmState::Disarmed {
+                        alarm_state = AlarmState::Armed(Instant::now());
                     }
                 }
                 AlarmCommand::Disarm => {

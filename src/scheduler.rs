@@ -192,6 +192,7 @@ fn handle_alarm_command(
 ) -> anyhow::Result<()> {
     let command = match payload {
         "ARM_AWAY" => AlarmCommand::Arm,
+        "ARM_CUSTOM_BYPASS" => AlarmCommand::ArmInstantly,
         "DISARM" => AlarmCommand::Disarm,
         "TRIGGER" => AlarmCommand::ManualTrigger,
         "UNTRIGGER" => AlarmCommand::Untrigger,
