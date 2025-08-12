@@ -1,0 +1,39 @@
+[package]
+name = "rusty-esp-alarm-firmware"
+version = "0.2.0"
+authors = ["akosnad"]
+edition = "2021"
+
+[package.metadata]
+board = "esp32"
+
+[[bin]]
+name = "rusty-esp-alarm-firmware"
+harness = false # do not use the built in cargo test harness -> resolve rust-analyzer errors
+
+[features]
+default = ["std", "embassy", "esp-idf-svc/native"]
+
+pio = ["esp-idf-svc/pio"]
+std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
+alloc = ["esp-idf-svc/alloc"]
+nightly = ["esp-idf-svc/nightly"]
+experimental = ["esp-idf-svc/experimental"]
+embassy = ["esp-idf-svc/embassy-sync", "esp-idf-svc/critical-section", "esp-idf-svc/embassy-time-driver"]
+simulation = []
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+esp-idf-svc = { version = "0.51.0", features = ["experimental"] }
+anyhow = { version = "1.0.86", features = ["backtrace"] }
+ha_types = { path = "../ha_types" }
+serde = { version = "1.0.204", features = ["derive"] }
+serde_json = "1.0.120"
+esp-ota = "0.2.0"
+seq-macro = "0.3.5"
+
+[build-dependencies]
+embuild = "0.33"
+
+[package.metadata.espflash]
+partition_table = "partitions.csv"

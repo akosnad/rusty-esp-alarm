@@ -2,8 +2,7 @@ use crate::AlarmCommand;
 use crate::AlarmEvent;
 use crate::AlarmState;
 use crate::StatusEvent;
-use esp_idf_svc::mqtt::client::{ConnState, EspMqttClient, MessageImpl, QoS};
-use esp_idf_sys::EspError;
+use esp_idf_svc::mqtt::client::{EspMqttClient, QoS};
 use ha_types::*;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
@@ -110,12 +109,11 @@ pub fn scheduler_task(
     }
 }
 
-fn init_mqtt(
-    client: &mut EspMqttClient<'_, ConnState<MessageImpl, EspError>>,
-    entities: &[HAEntity],
-) -> anyhow::Result<()> {
-    const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
-    const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
+fn init_mqtt(client: &mut EspMqttClient<'_>, entities: &[HAEntity]) -> anyhow::Result<()> {
+    // const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
+    // const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
+    const AVAILABILITY_TOPIC: &str = "";
+    const OTA_TOPIC: &str = "";
 
     // send entity config messages
     for entity in entities.iter() {
@@ -153,7 +151,7 @@ fn init_mqtt(
 fn send_binary_sensor_state(
     state: bool,
     entity: &HAEntity,
-    client: &mut EspMqttClient<'_, ConnState<MessageImpl, EspError>>,
+    client: &mut EspMqttClient<'_>,
 ) -> anyhow::Result<()> {
     let payload = if state { "ON" } else { "OFF" };
     client.publish(
@@ -168,7 +166,7 @@ fn send_binary_sensor_state(
 fn send_alarm_state_change(
     state: &AlarmState,
     entity: &HAEntity,
-    client: &mut EspMqttClient<'_, ConnState<MessageImpl, EspError>>,
+    client: &mut EspMqttClient<'_>,
 ) -> anyhow::Result<()> {
     let payload = match state {
         AlarmState::Disarmed => "disarmed",

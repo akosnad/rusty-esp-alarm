@@ -2,14 +2,16 @@ use std::time::Duration;
 use std::{sync::mpsc, thread::JoinHandle};
 
 use anyhow::bail;
-use esp_idf_hal::{cpu::Core, task::block_on};
+use esp_idf_svc::hal::{cpu::Core, task::block_on};
 use esp_idf_svc::handle::RawHandle;
+use esp_idf_svc::mqtt::client::EventPayload;
+use esp_idf_svc::sys::EspError;
 use esp_idf_svc::{
     eth::{AsyncEth, EspEth},
     eventloop::EspSystemEventLoop,
     mqtt::client::{
-        Details, EspMqttClient, InitialChunkData, LwtConfiguration, Message as _, MessageImpl,
-        MqttClientConfiguration, QoS, SubsequentChunkData,
+        Details, EspMqttClient, InitialChunkData, LwtConfiguration, MqttClientConfiguration, QoS,
+        SubsequentChunkData,
     },
     sys::{esp_netif_set_hostname, ESP_OK},
     timer::EspTaskTimerService,
@@ -19,9 +21,12 @@ use log::info;
 
 use crate::{spawn_task, StatusEvent};
 
-const MQTT_ENDPOINT: &str = env!("ESP_MQTT_ENDPOINT");
-const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
-const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
+// const MQTT_ENDPOINT: &str = env!("ESP_MQTT_ENDPOINT");
+// const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
+// const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
+const MQTT_ENDPOINT: &str = "";
+const AVAILABILITY_TOPIC: &str = "";
+const OTA_TOPIC: &str = "";
 
 pub fn init<T>(
     eth: &'static mut EspEth<'_, T>,
@@ -99,7 +104,8 @@ async fn eth_task<T>(
                     move || {
                         let status_tx_task = status_tx.clone();
                         let result = mqtt_task(status_tx_task, create_mqtt_client_config());
-                        if result.is_err() {
+                        if let Err(e) = result {
+                            log::error!("MQTT task failed: {e:?}");
                             status_tx
                                 .send(StatusEvent::MqttDisconnected)
                                 .unwrap_or_else(|e| {
@@ -138,18 +144,20 @@ fn mqtt_task(
     mqtt_client_config: MqttClientConfiguration<'_>,
 ) -> anyhow::Result<()> {
     info!("Starting MQTT...");
-    let (client, mut connection) =
-        EspMqttClient::new_with_conn(MQTT_ENDPOINT, &mqtt_client_config)?;
+    let (client, mut connection) = EspMqttClient::new(MQTT_ENDPOINT, &mqtt_client_config)?;
     let mut client = Some(client);
     let mut ota = None;
 
-    while let Some(msg) = connection.next() {
-        match msg {
-            Err(e) => info!("MQTT Message ERROR: {}", e),
+    loop {
+        match connection.next() {
+            Err(e) => {
+                info!("MQTT Message ERROR: {}", e);
+                break;
+            }
             Ok(msg) => {
-                let event: esp_idf_svc::mqtt::client::Event<MessageImpl> = msg;
+                let event = msg.payload();
 
-                if let esp_idf_svc::mqtt::client::Event::Connected(_) = event {
+                if let EventPayload::Connected(_) = event {
                     if let Some(client) = client.take() {
                         status_tx
                             .send(StatusEvent::MqttConnected(client))
@@ -165,7 +173,7 @@ fn mqtt_task(
                     }
                 };
 
-                if let esp_idf_svc::mqtt::client::Event::Disconnected = event {
+                if let EventPayload::Disconnected = event {
                     status_tx
                         .send(StatusEvent::MqttDisconnected)
                         .unwrap_or_else(|e| {
@@ -184,24 +192,30 @@ fn mqtt_task(
 }
 
 fn handle_mqtt_message(
-    event: esp_idf_svc::mqtt::client::Event<MessageImpl>,
+    event: EventPayload<'_, EspError>,
     status_tx: mpsc::Sender<StatusEvent>,
     ota: &mut Option<OtaUpdate>,
 ) -> anyhow::Result<()> {
-    if let esp_idf_svc::mqtt::client::Event::Received(msg) = event {
-        let topic = msg.topic();
-
+    if let EventPayload::Received {
+        id: _,
+        topic,
+        data,
+        details,
+    } = event
+    {
         // Handle OTA messages
         //
         // Messages are sent in chunks, with only the first message containing the topic.
         // Subsequent messages (we assume they are subsequent, this depends on how esp_idf_svc
         // handles them) contain no topic. We can only guess if it's an OTA message by checking if
         // the OTA is in progress.
+        //
+        // TODO: the above is probably not true anymore; should revisit this implementation
         if topic == Some(OTA_TOPIC) || ota.is_some() {
-            return handle_ota_message(msg, ota);
+            return handle_ota_message(data, details, ota);
         }
 
-        let content = String::from_utf8(msg.data().into())?;
+        let content = String::from_utf8(data.into())?;
         if let Some(topic) = topic {
             info!("MQTT Message on topic {}: {}", topic, content);
             status_tx
@@ -219,10 +233,13 @@ fn handle_mqtt_message(
     }
 }
 
-fn handle_ota_message(msg: MessageImpl, ota: &mut Option<OtaUpdate>) -> anyhow::Result<()> {
-    let data = msg.data();
+fn handle_ota_message(
+    data: &[u8],
+    details: Details,
+    ota: &mut Option<OtaUpdate>,
+) -> anyhow::Result<()> {
     if let Some(mut in_progress_ota) = ota.take() {
-        match msg.details() {
+        match details {
             Details::InitialChunk(_) => {
                 anyhow::bail!("Received initial OTA chunk while OTA is in progress");
             }
@@ -236,7 +253,7 @@ fn handle_ota_message(msg: MessageImpl, ota: &mut Option<OtaUpdate>) -> anyhow::
                     .write(data)
                     .expect("Failed to write OTA data");
 
-                if current == *total_data_size {
+                if current == total_data_size {
                     log::info!("OTA complete, applying...");
                     let mut completed_ota =
                         in_progress_ota.finalize().expect("Failed to finalize OTA");
@@ -262,7 +279,7 @@ fn handle_ota_message(msg: MessageImpl, ota: &mut Option<OtaUpdate>) -> anyhow::
         }
     } else {
         log::info!("Starting OTA...");
-        match msg.details() {
+        match details {
             Details::InitialChunk(InitialChunkData { total_data_size }) => {
                 log::info!("OTA data: 0/{}", total_data_size);
                 let mut new_ota = OtaUpdate::begin().expect("Failed to start OTA");

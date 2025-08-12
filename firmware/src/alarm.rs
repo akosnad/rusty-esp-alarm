@@ -1,4 +1,4 @@
-use esp_idf_hal::gpio::{InputMode, InputPin, Output, OutputPin, PinDriver};
+use esp_idf_svc::hal::gpio::{InputMode, InputPin, Output, OutputPin, PinDriver};
 use esp_idf_svc::nvs::*;
 use ha_types::*;
 use std::sync::mpsc::Receiver;

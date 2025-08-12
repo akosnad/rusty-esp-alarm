@@ -1,0 +1,4 @@
+[language-server.rust-analyzer.config]
+cargo.target = "xtensa-esp32-espidf"
+cargo.allTargets = false
+check.command = "clippy"

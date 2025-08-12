@@ -7,8 +7,11 @@ use std::{
     thread::JoinHandle,
 };
 
-use esp_idf_hal::peripheral::Peripheral;
-use esp_idf_hal::{
+use esp_idf_svc::hal::peripheral::Peripheral;
+use esp_idf_svc::hal::spi::Dma;
+use esp_idf_svc::hal::spi::SpiDriver;
+use esp_idf_svc::hal::spi::SpiDriverConfig;
+use esp_idf_svc::hal::{
     cpu::Core,
     gpio::{AnyIOPin, PinDriver},
     ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver},
@@ -16,17 +19,11 @@ use esp_idf_hal::{
     prelude::*,
     task::thread::ThreadSpawnConfiguration,
 };
-use esp_idf_svc::hal::spi::Dma;
-use esp_idf_svc::hal::spi::SpiDriver;
-use esp_idf_svc::hal::spi::SpiDriverConfig;
 
+use esp_idf_svc::sys::esp_restart;
 use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    mqtt::client::{ConnState, MessageImpl},
-    nvs::EspDefaultNvsPartition,
-    timer::EspTaskTimerService,
+    eventloop::EspSystemEventLoop, nvs::EspDefaultNvsPartition, timer::EspTaskTimerService,
 };
-use esp_idf_sys::{esp_restart, EspError};
 use ha_types::*;
 use log::{error, info};
 use seq_macro::seq;
@@ -140,7 +137,8 @@ fn main() -> anyhow::Result<()> {
     let mut siren_pin = PinDriver::output(pins.gpio27)?;
     siren_pin.set_low()?;
 
-    let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
+    // let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
+    let entities: Vec<HAEntity> = vec![];
     let mut motion_entites = entities
         .clone()
         .into_iter()
@@ -231,9 +229,7 @@ fn main() -> anyhow::Result<()> {
 enum StatusEvent {
     EthConnected,
     EthDisconnected,
-    MqttConnected(
-        esp_idf_svc::mqtt::client::EspMqttClient<'static, ConnState<MessageImpl, EspError>>,
-    ),
+    MqttConnected(esp_idf_svc::mqtt::client::EspMqttClient<'static>),
     MqttReconnected,
     MqttDisconnected,
     MqttMessage(MqttMessage),
@@ -268,7 +264,8 @@ fn simulation() -> anyhow::Result<()> {
         None,
     )?;
 
-    let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
+    // let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
+    let entities: Vec<HAEntity> = vec![];
     let alarm_entity = entities
         .iter()
         .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)

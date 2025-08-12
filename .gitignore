@@ -1,7 +1,8 @@
 /.vscode
 /.embuild
 /target
-/Cargo.lock
+result
+result-*
 
 /config.yml
 /ota.bin
