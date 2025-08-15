@@ -136,7 +136,7 @@ in
             RUSTFLAGS = lib.concatStringsSep " " firmwareCargoConfig.build.rustflags;
             CARGO_BUILD_TARGET = firmwareTarget;
             "CARGO_TARGET_${firmwareTarget'}_LINKER" = firmwareCargoConfig.target.${firmwareTarget}.linker;
-            buildPhaseCargoCommand = "cargo build -vv -p ${firmwarePackageName} --release -Zbuild-std=${lib.concatStringsSep "," buildStd}";
+            buildPhaseCargoCommand = "cargo build -p ${firmwarePackageName} --release -Zbuild-std=${lib.concatStringsSep "," buildStd}";
             cargoExtraArgs = "";
 
             flashScript = # sh

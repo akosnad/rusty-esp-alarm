@@ -72,7 +72,7 @@ async fn eth_task<T>(
 ) -> ! {
     loop {
         eth.stop().await.unwrap_or_else(|e| {
-            info!("failed to stop ethernet: {}", e);
+            info!("failed to stop ethernet: {e}");
         });
         info!("Starting Ethernet...");
         async {
@@ -98,7 +98,7 @@ async fn eth_task<T>(
 
             status_tx
                 .send(StatusEvent::EthConnected)
-                .unwrap_or_else(|e| info!("failed to send status: {}", e));
+                .unwrap_or_else(|e| info!("failed to send status: {e}"));
 
             info!("Connected to network");
 
@@ -118,7 +118,7 @@ async fn eth_task<T>(
                             status_tx
                                 .send(StatusEvent::MqttDisconnected)
                                 .unwrap_or_else(|e| {
-                                    info!("failed to send status: {}", e);
+                                    info!("failed to send status: {e}");
                                 });
                         }
                     },
@@ -142,7 +142,7 @@ async fn eth_task<T>(
             status_tx
                 .send(StatusEvent::EthDisconnected)
                 .unwrap_or_else(|e| {
-                    info!("failed to send status: {}", e);
+                    info!("failed to send status: {e}");
                 });
         });
     }
@@ -162,7 +162,7 @@ fn mqtt_task(
     loop {
         match connection.next() {
             Err(e) => {
-                info!("MQTT Message ERROR: {}", e);
+                info!("MQTT Message ERROR: {e}");
                 break;
             }
             Ok(msg) => {
@@ -173,13 +173,13 @@ fn mqtt_task(
                         status_tx
                             .send(StatusEvent::MqttConnected(client))
                             .unwrap_or_else(|e| {
-                                info!("failed to send status: {}", e);
+                                info!("failed to send status: {e}");
                             });
                     } else {
                         status_tx
                             .send(StatusEvent::MqttReconnected)
                             .unwrap_or_else(|e| {
-                                info!("failed to send status: {}", e);
+                                info!("failed to send status: {e}");
                             });
                     }
                 };
@@ -188,13 +188,13 @@ fn mqtt_task(
                     status_tx
                         .send(StatusEvent::MqttDisconnected)
                         .unwrap_or_else(|e| {
-                            info!("failed to send status: {}", e);
+                            info!("failed to send status: {e}");
                         });
                 };
 
                 handle_mqtt_message(event, status_tx.clone(), &mut ota, settings).unwrap_or_else(
                     |e| {
-                        info!("MQTT Message handling error: {}", e);
+                        info!("MQTT Message handling error: {e}");
                     },
                 )
             }
@@ -231,7 +231,7 @@ fn handle_mqtt_message(
 
         let content = String::from_utf8(data.into())?;
         if let Some(topic) = topic {
-            info!("MQTT Message on topic {}: {}", topic, content);
+            info!("MQTT Message on topic {topic}: {content}");
             status_tx
                 .send(StatusEvent::MqttMessage(crate::MqttMessage {
                     topic: String::from(topic),
@@ -239,7 +239,7 @@ fn handle_mqtt_message(
                 }))
                 .expect("Failed to send status event");
         } else {
-            info!("MQTT Message: {}", content);
+            info!("MQTT Message: {content}");
         }
         Ok(())
     } else {
@@ -262,7 +262,7 @@ fn handle_ota_message(
                 total_data_size,
             }) => {
                 let current = current_data_offset + data.len();
-                log::info!("OTA data: {}/{}", current, total_data_size);
+                log::info!("OTA data: {current}/{total_data_size}");
                 in_progress_ota
                     .write(data)
                     .expect("Failed to write OTA data");
@@ -295,7 +295,7 @@ fn handle_ota_message(
         log::info!("Starting OTA...");
         match details {
             Details::InitialChunk(InitialChunkData { total_data_size }) => {
-                log::info!("OTA data: 0/{}", total_data_size);
+                log::info!("OTA data: 0/{total_data_size}");
                 let mut new_ota = OtaUpdate::begin().expect("Failed to start OTA");
                 new_ota.write(data).expect("Failed to write OTA data");
                 ota.replace(new_ota);

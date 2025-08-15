@@ -9,7 +9,7 @@ in
       hci-effects.runIf (herculesCI.config.repo.branch == "main") (
         hci-effects.mkEffect {
           effectScript = ''
-            ${pkgs.lib.getExe' pkgs.mosquitto "mosquitto_pub"} -L mqtt://gaia_alarm/ota -f ${package}/ota.bin -q 2
+            ${pkgs.lib.getExe' pkgs.mosquitto "mosquitto_pub"} -L mqtt://gaia/gaia_alarm/ota -f ${package}/ota.bin -q 2
           '';
         }
       )

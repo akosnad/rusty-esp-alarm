@@ -23,12 +23,14 @@ pub fn scheduler_task(
     alarm_command_tx: Sender<AlarmCommand>,
     settings: MqttSettings,
 ) -> ! {
-    let alarm_entity_command_topic = alarm_entity
-        .command_topic
-        .expect("Alarm entity has no command topic");
-
     let mut mqtt_client = None;
     loop {
+        let alarm_entity = alarm_entity.clone();
+        let alarm_entity_command_topic = alarm_entity
+            .command_topic
+            .clone()
+            .expect("Alarm entity has no command topic");
+
         let loop_result = || -> anyhow::Result<()> {
             loop {
                 match status_rx.try_recv() {
@@ -40,13 +42,13 @@ pub fn scheduler_task(
                             log::info!("EthDisconnected");
                         }
                         StatusEvent::MqttConnected(mut client) => {
-                            init_mqtt(&mut client, motion_entities, settings)?;
+                            init_mqtt(&mut client, motion_entities, &alarm_entity, settings)?;
                             mqtt_client = Some(client);
                             log::info!("MqttConnected");
                         }
                         StatusEvent::MqttReconnected => {
                             if let Some(mut client) = mqtt_client.take() {
-                                init_mqtt(&mut client, motion_entities, settings)?;
+                                init_mqtt(&mut client, motion_entities, &alarm_entity, settings)?;
                                 mqtt_client = Some(client);
                             } else {
                                 anyhow::bail!("MqttReconnected: mqtt client is None");
@@ -106,7 +108,7 @@ pub fn scheduler_task(
             }
         }();
         if let Err(e) = loop_result {
-            log::error!("Error in scheduler task: {:?}", e);
+            log::error!("Error in scheduler task: {e:?}");
             log::info!("Restarting scheduler...");
         }
     }
@@ -115,6 +117,7 @@ pub fn scheduler_task(
 fn init_mqtt(
     client: &mut EspMqttClient<'_>,
     entities: &[HAEntity],
+    alarm_entity: &HAEntity,
     mqtt_setings: MqttSettings,
 ) -> anyhow::Result<()> {
     let MqttSettings {
@@ -140,17 +143,26 @@ fn init_mqtt(
         let entity_out: HAEntityOut = entity.into();
         let payload = serde_json::to_string(&entity_out).unwrap();
         client.publish(&topic, QoS::AtLeastOnce, true, payload.as_bytes())?;
+        log::debug!("published config for entity: {}", entity_out.name);
 
         if let Some(command_topic) = entity_out.command_topic {
             client.subscribe(&command_topic, QoS::ExactlyOnce)?;
+            log::debug!("subscribed to command topic: {command_topic}");
         }
+    }
+
+    if let Some(command_topic) = alarm_entity.command_topic.as_ref() {
+        client.subscribe(command_topic, QoS::ExactlyOnce)?;
+        log::debug!("subscribed to alarm entity command topic: {command_topic}");
     }
 
     // birth message
     client.publish(availability_topic, QoS::AtLeastOnce, true, b"online")?;
+    log::debug!("sent birth message");
 
     // subscribe to ota
     client.subscribe(ota_topic, QoS::ExactlyOnce)?;
+    log::debug!("subscribed to ota topic: {ota_topic}");
 
     Ok(())
 }
