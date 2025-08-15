@@ -8,18 +8,21 @@ use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+#[derive(Debug, Clone, Copy)]
+pub struct MqttSettings<'s> {
+    pub availability_topic: &'s str,
+    pub ota_topic: &'s str,
+}
+
 pub fn scheduler_task(
-    entities: &[HAEntity],
+    motion_entities: &[HAEntity],
+    alarm_entity: HAEntity,
     status_rx: Receiver<StatusEvent>,
     _status_tx: Sender<StatusEvent>,
     alarm_event_queue: Arc<Mutex<VecDeque<AlarmEvent>>>,
     alarm_command_tx: Sender<AlarmCommand>,
+    settings: MqttSettings,
 ) -> ! {
-    let alarm_entity = entities
-        .iter()
-        .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
-        .expect("Alarm entity not found")
-        .clone();
     let alarm_entity_command_topic = alarm_entity
         .command_topic
         .expect("Alarm entity has no command topic");
@@ -37,13 +40,13 @@ pub fn scheduler_task(
                             log::info!("EthDisconnected");
                         }
                         StatusEvent::MqttConnected(mut client) => {
-                            init_mqtt(&mut client, entities)?;
+                            init_mqtt(&mut client, motion_entities, settings)?;
                             mqtt_client = Some(client);
                             log::info!("MqttConnected");
                         }
                         StatusEvent::MqttReconnected => {
                             if let Some(mut client) = mqtt_client.take() {
-                                init_mqtt(&mut client, entities)?;
+                                init_mqtt(&mut client, motion_entities, settings)?;
                                 mqtt_client = Some(client);
                             } else {
                                 anyhow::bail!("MqttReconnected: mqtt client is None");
@@ -109,11 +112,15 @@ pub fn scheduler_task(
     }
 }
 
-fn init_mqtt(client: &mut EspMqttClient<'_>, entities: &[HAEntity]) -> anyhow::Result<()> {
-    // const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
-    // const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
-    const AVAILABILITY_TOPIC: &str = "";
-    const OTA_TOPIC: &str = "";
+fn init_mqtt(
+    client: &mut EspMqttClient<'_>,
+    entities: &[HAEntity],
+    mqtt_setings: MqttSettings,
+) -> anyhow::Result<()> {
+    let MqttSettings {
+        availability_topic,
+        ota_topic,
+    } = mqtt_setings;
 
     // send entity config messages
     for entity in entities.iter() {
@@ -121,7 +128,7 @@ fn init_mqtt(client: &mut EspMqttClient<'_>, entities: &[HAEntity]) -> anyhow::R
             availability: Some(HADeviceAvailability {
                 payload_available: Some("online".to_string()),
                 payload_not_available: Some("offline".to_string()),
-                topic: AVAILABILITY_TOPIC.to_string(),
+                topic: availability_topic.to_string(),
                 value_template: None,
             }),
             ..entity.clone()
@@ -140,10 +147,10 @@ fn init_mqtt(client: &mut EspMqttClient<'_>, entities: &[HAEntity]) -> anyhow::R
     }
 
     // birth message
-    client.publish(AVAILABILITY_TOPIC, QoS::AtLeastOnce, true, b"online")?;
+    client.publish(availability_topic, QoS::AtLeastOnce, true, b"online")?;
 
     // subscribe to ota
-    client.subscribe(OTA_TOPIC, QoS::ExactlyOnce)?;
+    client.subscribe(ota_topic, QoS::ExactlyOnce)?;
 
     Ok(())
 }
@@ -195,7 +202,7 @@ fn handle_alarm_command(
         "TRIGGER" => AlarmCommand::ManualTrigger,
         "UNTRIGGER" => AlarmCommand::Untrigger,
         _ => {
-            log::warn!("Unknown command: {}", payload);
+            log::warn!("Unknown command: {payload}");
             return Ok(());
         }
     };

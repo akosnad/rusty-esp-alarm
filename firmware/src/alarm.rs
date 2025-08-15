@@ -1,5 +1,4 @@
 use esp_idf_svc::hal::gpio::{InputMode, InputPin, Output, OutputPin, PinDriver};
-use esp_idf_svc::nvs::*;
 use ha_types::*;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
@@ -42,7 +41,6 @@ pub enum AlarmCommand {
 pub fn alarm_task<T, MODE>(
     event_queue: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<AlarmEvent>>>,
     command_rx: Receiver<AlarmCommand>,
-    _nvs_default_partition: EspDefaultNvsPartition,
     motion_entities: &mut [AlarmMotionEntity<T, MODE>],
     alarm_entity: HAEntity,
     mut siren_pin: PinDriver<impl OutputPin, Output>,
@@ -51,8 +49,7 @@ where
     T: InputPin + OutputPin,
     MODE: InputMode,
 {
-    // TODO: state persistence with NVS
-    //let nvs = EspNvs::new(nvs_default_partition, "alarm", true).unwrap();
+    // TODO: state persistence with runtime settings
     let mut alarm_state = AlarmState::Disarmed;
 
     // TODO: make these configurable
@@ -137,17 +134,17 @@ where
             }
             AlarmState::Triggered => {
                 siren_pin.set_high().unwrap_or_else(|e| {
-                    log::error!("Failed to set siren pin high: {:?}", e);
+                    log::error!("Failed to set siren pin high: {e:?}");
                 });
             }
         }
 
         if last_state != alarm_state {
-            log::info!("Alarm state changed: {:?}", alarm_state);
+            log::info!("Alarm state changed: {alarm_state:?}");
 
             if last_state == AlarmState::Triggered {
                 siren_pin.set_low().unwrap_or_else(|e| {
-                    log::error!("Failed to set siren pin low: {:?}", e);
+                    log::error!("Failed to set siren pin low: {e:?}");
                 });
             }
 

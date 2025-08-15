@@ -56,11 +56,15 @@
               ];
             };
 
-            project.toolchain = with fenix.packages.${system};
-              combine (with pkgs; [
-                rust-esp
-                rust-src-esp
-              ]);
+            project.toolchain =
+              with fenix.packages.${system};
+              combine (
+                with pkgs;
+                [
+                  rust-esp
+                  rust-src-esp
+                ]
+              );
 
             treefmt = {
               projectRootFile = "Cargo.toml";

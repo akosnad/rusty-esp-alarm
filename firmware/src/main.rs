@@ -1,8 +1,8 @@
 use std::{
     collections::VecDeque,
     sync::{
-        mpsc::{self},
         Arc,
+        mpsc::{self},
     },
     thread::JoinHandle,
 };
@@ -14,7 +14,7 @@ use esp_idf_svc::hal::spi::SpiDriverConfig;
 use esp_idf_svc::hal::{
     cpu::Core,
     gpio::{AnyIOPin, PinDriver},
-    ledc::{config::TimerConfig, LedcDriver, LedcTimerDriver},
+    ledc::{LedcDriver, LedcTimerDriver, config::TimerConfig},
     peripherals::Peripherals,
     prelude::*,
     task::thread::ThreadSpawnConfiguration,
@@ -26,11 +26,13 @@ use esp_idf_svc::{
 };
 use ha_types::*;
 use log::{error, info};
+use scheduler::MqttSettings;
 use seq_macro::seq;
 
 mod alarm;
 mod network;
 mod scheduler;
+mod settings;
 
 use alarm::{AlarmCommand, AlarmEvent, AlarmState};
 
@@ -40,7 +42,7 @@ fn spawn_task(
     task_name: &'static str,
     pin_to_core: Option<Core>,
 ) -> anyhow::Result<JoinHandle<()>> {
-    info!("spawning task: {}", task_name);
+    info!("spawning task: {task_name}");
 
     ThreadSpawnConfiguration {
         name: Some(task_name.as_bytes()),
@@ -51,7 +53,7 @@ fn spawn_task(
 
     let handle = std::thread::Builder::new().stack_size(8192).spawn(task)?;
 
-    info!("spawned task: {}", task_name);
+    info!("spawned task: {task_name}");
 
     Ok(handle)
 }
@@ -85,7 +87,15 @@ fn main() -> anyhow::Result<()> {
     let mut pins = peripherals.pins;
     let sysloop = EspSystemEventLoop::take()?;
     let timer = EspTaskTimerService::new()?;
-    let nvs = EspDefaultNvsPartition::take()?;
+
+    // NVS API isn't actually used, but this call ensures
+    // that the flash memory driver is initialized.
+    let _ = EspDefaultNvsPartition::take()?;
+
+    // SAFETY:
+    // - this function is called exatly once during the lifetime of the program
+    // - this function is called after the flash is initialized
+    let mut settings = unsafe { settings::init() };
 
     let led = {
         let timer = LedcTimerDriver::new(
@@ -117,15 +127,6 @@ fn main() -> anyhow::Result<()> {
         )?,
     )?));
 
-    // let mut pin_driver = esp_idf_svc::hal::gpio::PinDriver::input(pins.gpio4)?;
-    // pin_driver.set_pull(esp_idf_svc::hal::gpio::Pull::Up)?;
-
-    // loop {
-    //     let motion = pin_driver.is_high();
-    //     info!("Motion: {}", motion);
-    //     std::thread::sleep(std::time::Duration::from_millis(250));
-    // }
-
     let mut tasks = Vec::new();
     let alarm_event_queue = Arc::new(std::sync::Mutex::new(VecDeque::new()));
 
@@ -133,15 +134,41 @@ fn main() -> anyhow::Result<()> {
     let (alarm_command_tx, alarm_command_rx) = mpsc::channel::<alarm::AlarmCommand>();
     let _alarm_event_queue = alarm_event_queue.clone();
 
-    // TODO: make siren a configurable entity
-    let mut siren_pin = PinDriver::output(pins.gpio27)?;
+    let siren_pin_num: u8 = settings
+        .get_blocking("siren-pin")
+        .map_err(|e| anyhow::anyhow!("failed getting `siren-pin` setting: {e:?}"))?
+        .ok_or(anyhow::anyhow!(
+            "`siren-pin` is not defined in settings, but is required"
+        ))?;
+    // SAFETY: stealing of the given GPIO pin is reliant on what is configured in settings.
+    // no pins should be specified twice in settings. it this holds, then no pins are overlapping.
+    // this guarantees that stealing the pin is safe; only one instance is being used of given pin.
+    let siren_pin: Option<AnyIOPin> = unsafe {
+        gpio_pin_num_to_peripheral!(siren_pin_num, pins, 0, 2)
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 3, 5))
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 6, 18))
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 21, 23))
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 25, 26))
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 27, 28))
+            .or(gpio_pin_num_to_peripheral!(siren_pin_num, pins, 32, 33))
+    };
+    let siren_pin = siren_pin.ok_or(anyhow::anyhow!(
+        "siren pin is not a valid GPIO pin number: {siren_pin_num}"
+    ))?;
+    let mut siren_pin = PinDriver::output(siren_pin)?;
     siren_pin.set_low()?;
 
-    // let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
-    let entities: Vec<HAEntity> = vec![];
-    let mut motion_entites = entities
-        .clone()
-        .into_iter()
+    let motion_entities: Vec<HAEntity> = settings
+        .get_deserialized_blocking("motion-entities")
+        .map_err(|e| anyhow::anyhow!("failed getting `motion-entities` setting: {e:?}"))?
+        .ok_or(anyhow::anyhow!(
+            "`motion-entities` is not defined in settings, but is required"
+        ))?;
+    log::info!("loaded motion entities: {motion_entities:?}");
+
+    let mut alarm_motion_entites = motion_entities
+        .iter()
+        .cloned()
         .filter_map(|entity| {
             let pin = match entity.gpio_pin {
                 // SAFETY: clone_unchecked() calls are safe because
@@ -149,11 +176,12 @@ fn main() -> anyhow::Result<()> {
                 // the alarm task throughout the lifetime of the program.
                 Some(pin) => unsafe {
                     let pin: Option<AnyIOPin> = gpio_pin_num_to_peripheral!(pin, pins, 0, 2)
-                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 3, 5))
-                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 6, 18))
-                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 21, 23))
-                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 25, 26))
-                        .or_else(|| gpio_pin_num_to_peripheral!(pin, pins, 32, 33));
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 3, 5))
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 6, 18))
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 21, 23))
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 25, 26))
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 27, 28))
+                        .or(gpio_pin_num_to_peripheral!(pin, pins, 32, 33));
                     pin.expect("Invalid GPIO pin provided")
                 },
                 None => return None,
@@ -171,20 +199,22 @@ fn main() -> anyhow::Result<()> {
         })
         .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
 
-    let alarm_entity = entities
-        .iter()
-        .find(|entity| entity.variant == HAEntityVariant::alarm_control_panel)
-        .expect("Alarm entity not found")
-        .clone();
+    let alarm_entity: HAEntity = settings
+        .get_deserialized_blocking("alarm-entity")
+        .map_err(|e| anyhow::anyhow!("failed getting `alarm-entity` setting: {e:?}"))?
+        .ok_or(anyhow::anyhow!(
+            "`alarm-entity` is not defined in settings, but is required"
+        ))?;
+    log::info!("loaded alarm entity: {alarm_entity:?}");
 
+    let alarm_entity_clone = alarm_entity.clone();
     tasks.push(spawn_task(
         move || {
             alarm::alarm_task(
                 _alarm_event_queue,
                 alarm_command_rx,
-                nvs,
-                &mut motion_entites,
-                alarm_entity,
+                &mut alarm_motion_entites,
+                alarm_entity_clone,
                 siren_pin,
             );
         },
@@ -192,27 +222,80 @@ fn main() -> anyhow::Result<()> {
         Some(Core::Core1),
     )?);
 
+    let availability_topic = String::from(
+        settings
+            .get_str_blocking("availability-topic")
+            .map_err(|e| anyhow::anyhow!("failed getting `availability-topic` setting: {e:?}"))?
+            .ok_or(anyhow::anyhow!(
+                "`availability-topic` is not defined in settings, but is required"
+            ))?,
+    );
+    let ota_topic = String::from(
+        settings
+            .get_str_blocking("ota-topic")
+            .map_err(|e| anyhow::anyhow!("failed getting `ota-topic` setting: {e:?}"))?
+            .ok_or(anyhow::anyhow!(
+                "`ota-topic` is not defined in settings, but is required"
+            ))?,
+    );
+
     // Scheduler task
     let (status_tx, status_rx) = mpsc::channel::<StatusEvent>();
     let status_tx_scheduler = status_tx.clone();
     let alarm_command_tx_scheduler = alarm_command_tx.clone();
     let alarm_event_queue_scheduler = alarm_event_queue.clone();
+    let availability_topic_clone = availability_topic.clone();
+    let ota_topic_clone = ota_topic.clone();
     tasks.push(spawn_task(
         move || {
             scheduler::scheduler_task(
-                &entities,
+                &motion_entities,
+                alarm_entity,
                 status_rx,
                 status_tx_scheduler,
                 alarm_event_queue_scheduler,
                 alarm_command_tx_scheduler,
+                MqttSettings {
+                    availability_topic: &availability_topic_clone,
+                    ota_topic: &ota_topic_clone,
+                },
             );
         },
         "scheduler\0",
         Some(Core::Core0),
     )?);
 
+    let hostname = String::from(
+        settings
+            .get_str_blocking("hostname")
+            .map_err(|e| anyhow::anyhow!("failed getting `hostname` setting: {e:?}"))?
+            .ok_or(anyhow::anyhow!(
+                "`hostname` is not defined in settings, but is required"
+            ))?,
+    );
+    let mqtt_endpoint = String::from(
+        settings
+            .get_str_blocking("mqtt-endpoint")
+            .map_err(|e| anyhow::anyhow!("failed getting `mqtt-endpoint` setting: {e:?}"))?
+            .ok_or(anyhow::anyhow!(
+                "`mqtt-endpoint` is not defined in settings, but is required"
+            ))?,
+    );
+
     // Network stack
-    network::init(eth, sysloop.clone(), timer, status_tx.clone(), &mut tasks)?;
+    network::init(
+        eth,
+        sysloop.clone(),
+        timer,
+        status_tx.clone(),
+        &mut tasks,
+        &network::NetworkSettings {
+            hostname,
+            mqtt_endpoint,
+            availability_topic,
+            ota_topic,
+        },
+    )?;
 
     // Wait for tasks to exit
     for task in tasks {
@@ -224,6 +307,7 @@ fn main() -> anyhow::Result<()> {
     unsafe {
         esp_restart();
     }
+    Ok(())
 }
 
 enum StatusEvent {
@@ -264,7 +348,6 @@ fn simulation() -> anyhow::Result<()> {
         None,
     )?;
 
-    // let entities: Vec<HAEntity> = include!(concat!(env!("OUT_DIR"), "/entities.rs"));
     let entities: Vec<HAEntity> = vec![];
     let alarm_entity = entities
         .iter()

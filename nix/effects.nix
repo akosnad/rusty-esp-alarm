@@ -1,6 +1,6 @@
 { config, withSystem, ... }:
 let
-  inherit (withSystem "x86_64-linux" ({ config, ... }: config.project)) name package;
+  inherit (withSystem "x86_64-linux" ({ config, ... }: config.project)) package;
 in
 {
   herculesCI = herculesCI: {
@@ -9,7 +9,7 @@ in
       hci-effects.runIf (herculesCI.config.repo.branch == "main") (
         hci-effects.mkEffect {
           effectScript = ''
-            ${pkgs.lib.getExe' pkgs.mosquitto "mosquitto_pub"} -L mqtt://gaia/${name}/ota -f ${package}/ota.bin -q 2
+            ${pkgs.lib.getExe' pkgs.mosquitto "mosquitto_pub"} -L mqtt://gaia_alarm/ota -f ${package}/ota.bin -q 2
           '';
         }
       )

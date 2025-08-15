@@ -27,10 +27,12 @@ log = { version = "0.4", default-features = false }
 esp-idf-svc = { version = "0.51.0", features = ["experimental"] }
 anyhow = { version = "1.0.86", features = ["backtrace"] }
 ha_types = { path = "../ha_types" }
-serde = { version = "1.0.204", features = ["derive"] }
 serde_json = "1.0.120"
 esp-ota = "0.2.0"
 seq-macro = "0.3.5"
+rusty-esp-alarm = { path = ".." }
+embedded-storage-async = "0.4.1"
+embedded-storage = "0.3.1"
 
 [build-dependencies]
 embuild = "0.33"

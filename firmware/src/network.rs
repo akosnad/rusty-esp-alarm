@@ -13,20 +13,21 @@ use esp_idf_svc::{
         Details, EspMqttClient, InitialChunkData, LwtConfiguration, MqttClientConfiguration, QoS,
         SubsequentChunkData,
     },
-    sys::{esp_netif_set_hostname, ESP_OK},
+    sys::{ESP_OK, esp_netif_set_hostname},
     timer::EspTaskTimerService,
 };
 use esp_ota::OtaUpdate;
 use log::info;
 
-use crate::{spawn_task, StatusEvent};
+use crate::{StatusEvent, spawn_task};
 
-// const MQTT_ENDPOINT: &str = env!("ESP_MQTT_ENDPOINT");
-// const AVAILABILITY_TOPIC: &str = env!("ESP_AVAILABILITY_TOPIC");
-// const OTA_TOPIC: &str = env!("ESP_OTA_TOPIC");
-const MQTT_ENDPOINT: &str = "";
-const AVAILABILITY_TOPIC: &str = "";
-const OTA_TOPIC: &str = "";
+#[derive(Debug, Clone)]
+pub struct NetworkSettings {
+    pub hostname: String,
+    pub mqtt_endpoint: String,
+    pub availability_topic: String,
+    pub ota_topic: String,
+}
 
 pub fn init<T>(
     eth: &'static mut EspEth<'_, T>,
@@ -34,12 +35,14 @@ pub fn init<T>(
     timer: EspTaskTimerService,
     status_tx: mpsc::Sender<StatusEvent>,
     tasks: &mut Vec<JoinHandle<()>>,
+    settings: &NetworkSettings,
 ) -> anyhow::Result<()> {
     let eth = AsyncEth::wrap(eth, sys_loop, timer)?;
     let status_tx_eth = status_tx.clone();
+    let settings_clone = settings.clone();
     tasks.push(spawn_task(
         move || {
-            block_on(eth_task(eth, status_tx_eth));
+            block_on(eth_task(eth, status_tx_eth, &settings_clone));
         },
         "eth\0",
         Some(Core::Core0),
@@ -48,12 +51,12 @@ pub fn init<T>(
     Ok(())
 }
 
-fn create_mqtt_client_config() -> MqttClientConfiguration<'static> {
+fn create_mqtt_client_config<'s>(availability_topic: &'s str) -> MqttClientConfiguration<'s> {
     MqttClientConfiguration {
         client_id: Some("alarm"),
         keep_alive_interval: Some(Duration::from_secs(15)),
         lwt: Some(LwtConfiguration {
-            topic: AVAILABILITY_TOPIC,
+            topic: availability_topic,
             payload: b"offline",
             qos: QoS::AtLeastOnce,
             retain: true,
@@ -65,6 +68,7 @@ fn create_mqtt_client_config() -> MqttClientConfiguration<'static> {
 async fn eth_task<T>(
     mut eth: AsyncEth<&mut EspEth<'_, T>>,
     status_tx: mpsc::Sender<StatusEvent>,
+    settings: &NetworkSettings,
 ) -> ! {
     loop {
         eth.stop().await.unwrap_or_else(|e| {
@@ -72,11 +76,11 @@ async fn eth_task<T>(
         });
         info!("Starting Ethernet...");
         async {
-            const HOSTNAME: &str = "alarm\0";
+            let hostname = format!("{}{}", settings.hostname, '\0');
             unsafe {
                 let result = esp_netif_set_hostname(
                     eth.eth().netif().handle(),
-                    core::ffi::CStr::from_bytes_with_nul(HOSTNAME.as_bytes())
+                    core::ffi::CStr::from_bytes_with_nul(hostname.clone().as_bytes())
                         .unwrap()
                         .as_ptr(),
                 );
@@ -100,10 +104,15 @@ async fn eth_task<T>(
 
             loop {
                 let status_tx = status_tx.clone();
+                let settings = settings.clone();
                 let mqtt_task_handle = spawn_task(
                     move || {
                         let status_tx_task = status_tx.clone();
-                        let result = mqtt_task(status_tx_task, create_mqtt_client_config());
+                        let result = mqtt_task(
+                            status_tx_task,
+                            create_mqtt_client_config(settings.availability_topic.clone().as_str()),
+                            &settings,
+                        );
                         if let Err(e) = result {
                             log::error!("MQTT task failed: {e:?}");
                             status_tx
@@ -142,9 +151,11 @@ async fn eth_task<T>(
 fn mqtt_task(
     status_tx: mpsc::Sender<StatusEvent>,
     mqtt_client_config: MqttClientConfiguration<'_>,
+    settings: &NetworkSettings,
 ) -> anyhow::Result<()> {
     info!("Starting MQTT...");
-    let (client, mut connection) = EspMqttClient::new(MQTT_ENDPOINT, &mqtt_client_config)?;
+    let (client, mut connection) =
+        EspMqttClient::new(settings.mqtt_endpoint.as_str(), &mqtt_client_config)?;
     let mut client = Some(client);
     let mut ota = None;
 
@@ -181,9 +192,11 @@ fn mqtt_task(
                         });
                 };
 
-                handle_mqtt_message(event, status_tx.clone(), &mut ota).unwrap_or_else(|e| {
-                    info!("MQTT Message handling error: {}", e);
-                })
+                handle_mqtt_message(event, status_tx.clone(), &mut ota, settings).unwrap_or_else(
+                    |e| {
+                        info!("MQTT Message handling error: {}", e);
+                    },
+                )
             }
         }
     }
@@ -195,6 +208,7 @@ fn handle_mqtt_message(
     event: EventPayload<'_, EspError>,
     status_tx: mpsc::Sender<StatusEvent>,
     ota: &mut Option<OtaUpdate>,
+    settings: &NetworkSettings,
 ) -> anyhow::Result<()> {
     if let EventPayload::Received {
         id: _,
@@ -211,7 +225,7 @@ fn handle_mqtt_message(
         // the OTA is in progress.
         //
         // TODO: the above is probably not true anymore; should revisit this implementation
-        if topic == Some(OTA_TOPIC) || ota.is_some() {
+        if topic == Some(settings.ota_topic.as_str()) || ota.is_some() {
             return handle_ota_message(data, details, ota);
         }
 
