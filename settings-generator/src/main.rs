@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use clap::Parser as _;
 use embedded_storage_file::{NorMemoryAsync, NorMemoryInFile};
 use ha_types::HAEntity;
@@ -40,6 +42,11 @@ async fn main() -> anyhow::Result<()> {
     let conf_raw = tokio::fs::read(conf_path).await?;
     let configuration: Configuration = serde_yaml::from_slice(&conf_raw)?;
 
+    let mac_address: MACAddress = configuration.mac_address.parse()?;
+    settings
+        .set("mac-address", &mac_address.addr())
+        .await
+        .map_err(|e| anyhow::anyhow!("setting mac-address failed: {e:?}"))?;
     settings
         .set("hostname", &configuration.hostname.as_bytes())
         .await
@@ -86,6 +93,7 @@ async fn main() -> anyhow::Result<()> {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Configuration {
+    mac_address: String,
     hostname: String,
     mqtt_endpoint: String,
     availability_topic: String,
@@ -93,4 +101,30 @@ struct Configuration {
     siren_pin: u8,
     alarm_entity: HAEntity,
     motion_entities: Vec<HAEntity>,
+}
+
+#[derive(Debug)]
+struct MACAddress(Vec<u8>);
+impl FromStr for MACAddress {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let octets: Result<Vec<_>, _> = s
+            .split(':')
+            .map(|raw_octet| u8::from_str_radix(raw_octet, 16))
+            .collect();
+        let octets = octets?;
+        if octets.len() != 6 {
+            anyhow::bail!(
+                "MAC address should have 6 octets, but found {}",
+                octets.len()
+            );
+        }
+        Ok(Self(octets))
+    }
+}
+impl MACAddress {
+    fn addr(&self) -> &[u8] {
+        &self.0
+    }
 }

@@ -161,7 +161,11 @@ in
                 chmod +x $out/bin/flash.sh
                 cp target/"${firmwareTarget}"/release/{bootloader.bin,partition-table.bin} $out/
                 cp firmware/partitions.csv $out/
-                espflash save-image --chip ${firmwareBoard} --partition-table firmware/partitions.csv "$out/bin/${firmwarePackageName}" $out/ota.bin
+                espflash save-image \
+                  --chip ${firmwareBoard} \
+                  --partition-table firmware/partitions.csv \
+                  --bootloader target/"${firmwareTarget}"/release/bootloader.bin \
+                  "$out/bin/${firmwarePackageName}" $out/ota.bin
               '';
           };
         };

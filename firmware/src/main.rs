@@ -107,6 +107,13 @@ fn main() -> anyhow::Result<()> {
     };
     led.set_duty(0)?;
 
+    let mac_addr: [u8; 6] = settings
+        .get_blocking("mac-address")
+        .map_err(|e| anyhow::anyhow!("failed getting `mac-address` setting: {e:?}"))?
+        .ok_or(anyhow::anyhow!(
+            "`mac-address` is not defineed in settings, but is required"
+        ))?;
+
     let eth = Box::leak(Box::new(esp_idf_svc::eth::EspEth::wrap(
         esp_idf_svc::eth::EthDriver::new_spi(
             SpiDriver::new(
@@ -121,7 +128,7 @@ fn main() -> anyhow::Result<()> {
             Some(pins.gpio33),
             esp_idf_svc::eth::SpiEthChipset::W5500,
             20.MHz().into(),
-            Some(&[0x02, 0x00, 0x00, 0xfc, 0x18, 0x01]),
+            Some(&mac_addr),
             None,
             sysloop.clone(),
         )?,
