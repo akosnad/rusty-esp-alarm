@@ -33,6 +33,7 @@ seq-macro = "0.3.5"
 rusty-esp-alarm = { path = ".." }
 embedded-storage-async = "0.4.1"
 embedded-storage = "0.3.1"
+serde = "1.0.219"
 
 [build-dependencies]
 embuild = "0.33"

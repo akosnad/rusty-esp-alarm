@@ -1,5 +1,7 @@
 const BUFFER_SIZE: usize = 4096;
 
+pub type Settings = rusty_esp_alarm::settings::Settings<'static, BUFFER_SIZE, EspFlash>;
+
 /// Set up runtime settings storage
 ///
 /// # Safety
@@ -7,7 +9,7 @@ const BUFFER_SIZE: usize = 4096;
 ///   (there should only be one instance of Settings).
 /// - It also must be called after `esp_flash_default_chip` is initialized. (this can be
 ///   guaranteed by esp-idf-svc after constructing an `EspNvsPartition`).
-pub unsafe fn init() -> rusty_esp_alarm::settings::Settings<'static, BUFFER_SIZE, EspFlash> {
+pub unsafe fn init() -> Settings {
     // SAFETY: the calls to ESP-IDF bindings are used correctly.
     unsafe {
         let partition = esp_idf_svc::hal::sys::esp_partition_find_first(

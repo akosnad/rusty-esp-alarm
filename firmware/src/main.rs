@@ -1,7 +1,9 @@
+#![feature(slice_split_once)]
+
 use std::{
     collections::VecDeque,
     sync::{
-        Arc,
+        Arc, Mutex,
         mpsc::{self},
     },
     thread::JoinHandle,
@@ -95,7 +97,7 @@ fn main() -> anyhow::Result<()> {
     // SAFETY:
     // - this function is called exatly once during the lifetime of the program
     // - this function is called after the flash is initialized
-    let mut settings = unsafe { settings::init() };
+    let settings = Arc::new(Mutex::new(unsafe { settings::init() }));
 
     let led = {
         let timer = LedcTimerDriver::new(
@@ -108,6 +110,8 @@ fn main() -> anyhow::Result<()> {
     led.set_duty(0)?;
 
     let mac_addr: [u8; 6] = settings
+        .lock()
+        .unwrap()
         .get_blocking("mac-address")
         .map_err(|e| anyhow::anyhow!("failed getting `mac-address` setting: {e:?}"))?
         .ok_or(anyhow::anyhow!(
@@ -142,6 +146,8 @@ fn main() -> anyhow::Result<()> {
     let _alarm_event_queue = alarm_event_queue.clone();
 
     let siren_pin_num: u8 = settings
+        .lock()
+        .unwrap()
         .get_blocking("siren-pin")
         .map_err(|e| anyhow::anyhow!("failed getting `siren-pin` setting: {e:?}"))?
         .ok_or(anyhow::anyhow!(
@@ -166,6 +172,8 @@ fn main() -> anyhow::Result<()> {
     siren_pin.set_low()?;
 
     let motion_entities: Vec<HAEntity> = settings
+        .lock()
+        .unwrap()
         .get_deserialized_blocking("motion-entities")
         .map_err(|e| anyhow::anyhow!("failed getting `motion-entities` setting: {e:?}"))?
         .ok_or(anyhow::anyhow!(
@@ -207,6 +215,8 @@ fn main() -> anyhow::Result<()> {
         .collect::<Vec<alarm::AlarmMotionEntity<_, _>>>();
 
     let alarm_entity: HAEntity = settings
+        .lock()
+        .unwrap()
         .get_deserialized_blocking("alarm-entity")
         .map_err(|e| anyhow::anyhow!("failed getting `alarm-entity` setting: {e:?}"))?
         .ok_or(anyhow::anyhow!(
@@ -215,6 +225,7 @@ fn main() -> anyhow::Result<()> {
     log::info!("loaded alarm entity: {alarm_entity:?}");
 
     let alarm_entity_clone = alarm_entity.clone();
+    let alarm_settings_clone = settings.clone();
     tasks.push(spawn_task(
         move || {
             alarm::alarm_task(
@@ -223,6 +234,7 @@ fn main() -> anyhow::Result<()> {
                 &mut alarm_motion_entites,
                 alarm_entity_clone,
                 siren_pin,
+                alarm_settings_clone,
             );
         },
         "alarm\0",
@@ -231,6 +243,8 @@ fn main() -> anyhow::Result<()> {
 
     let availability_topic = String::from(
         settings
+            .lock()
+            .unwrap()
             .get_str_blocking("availability-topic")
             .map_err(|e| anyhow::anyhow!("failed getting `availability-topic` setting: {e:?}"))?
             .ok_or(anyhow::anyhow!(
@@ -239,10 +253,22 @@ fn main() -> anyhow::Result<()> {
     );
     let ota_topic = String::from(
         settings
+            .lock()
+            .unwrap()
             .get_str_blocking("ota-topic")
             .map_err(|e| anyhow::anyhow!("failed getting `ota-topic` setting: {e:?}"))?
             .ok_or(anyhow::anyhow!(
                 "`ota-topic` is not defined in settings, but is required"
+            ))?,
+    );
+    let settings_topic_prefix = String::from(
+        settings
+            .lock()
+            .unwrap()
+            .get_str_blocking("settings-topic-prefix")
+            .map_err(|e| anyhow::anyhow!("failed getting `settings-topic-prefix` setting: {e:?}"))?
+            .ok_or(anyhow::anyhow!(
+                "`settings-topic-prefix` is not defined in settings, but is required"
             ))?,
     );
 
@@ -253,6 +279,7 @@ fn main() -> anyhow::Result<()> {
     let alarm_event_queue_scheduler = alarm_event_queue.clone();
     let availability_topic_clone = availability_topic.clone();
     let ota_topic_clone = ota_topic.clone();
+    let scheduler_settings_clone = settings.clone();
     tasks.push(spawn_task(
         move || {
             scheduler::scheduler_task(
@@ -265,7 +292,9 @@ fn main() -> anyhow::Result<()> {
                 MqttSettings {
                     availability_topic: &availability_topic_clone,
                     ota_topic: &ota_topic_clone,
+                    settings_topic_prefix: &settings_topic_prefix,
                 },
+                scheduler_settings_clone,
             );
         },
         "scheduler\0",
@@ -274,6 +303,8 @@ fn main() -> anyhow::Result<()> {
 
     let hostname = String::from(
         settings
+            .lock()
+            .unwrap()
             .get_str_blocking("hostname")
             .map_err(|e| anyhow::anyhow!("failed getting `hostname` setting: {e:?}"))?
             .ok_or(anyhow::anyhow!(
@@ -282,6 +313,8 @@ fn main() -> anyhow::Result<()> {
     );
     let mqtt_endpoint = String::from(
         settings
+            .lock()
+            .unwrap()
             .get_str_blocking("mqtt-endpoint")
             .map_err(|e| anyhow::anyhow!("failed getting `mqtt-endpoint` setting: {e:?}"))?
             .ok_or(anyhow::anyhow!(
@@ -324,6 +357,7 @@ enum StatusEvent {
     MqttReconnected,
     MqttDisconnected,
     MqttMessage(MqttMessage),
+    MqttMessageRaw { topic: String, payload: Vec<u8> },
 }
 
 #[derive(Debug, Clone)]

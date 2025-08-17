@@ -1,10 +1,9 @@
-use std::str::FromStr;
-
 use clap::Parser as _;
 use embedded_storage_file::{NorMemoryAsync, NorMemoryInFile};
 use ha_types::HAEntity;
 use rusty_esp_alarm::{self as lib};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 /// Reads key value pairs from stdin and convertss them to a flashable settings partition binary
 #[derive(clap::Parser)]
@@ -66,6 +65,13 @@ async fn main() -> anyhow::Result<()> {
         .set("ota-topic", &configuration.ota_topic.as_bytes())
         .await
         .map_err(|e| anyhow::anyhow!("setting ota-topic failed: {e:?}"))?;
+    settings
+        .set(
+            "settings-topic-prefix",
+            &configuration.settings_topic_prefix.as_bytes(),
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("setting settings-topic-prefix failed: {e:?}"))?;
 
     settings
         .set("siren-pin", &configuration.siren_pin)
@@ -79,6 +85,12 @@ async fn main() -> anyhow::Result<()> {
         )
         .await
         .map_err(|e| anyhow::anyhow!("setting alarm-entity failed: {e:?}"))?;
+    if let Some(alarm_settings) = configuration.alarm_settings {
+        settings
+            .set_serialized("alarm-settings", &alarm_settings, &mut [0u8; 1024])
+            .await
+            .map_err(|e| anyhow::anyhow!("setting alarm-settings failed: {e:?}"))?;
+    }
     settings
         .set_serialized(
             "motion-entities",
@@ -98,9 +110,37 @@ struct Configuration {
     mqtt_endpoint: String,
     availability_topic: String,
     ota_topic: String,
+    settings_topic_prefix: String,
     siren_pin: u8,
     alarm_entity: HAEntity,
+    alarm_settings: Option<AlarmSettings>,
     motion_entities: Vec<HAEntity>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct AlarmSettings {
+    #[serde(default = "default_alarm_state")]
+    initial_state: AlarmState,
+    #[serde(default = "default_arming_timeout")]
+    arming_timeout: u16,
+    #[serde(default = "default_pending_timeout")]
+    pending_timeout: u16,
+}
+fn default_alarm_state() -> AlarmState {
+    AlarmState::Disarmed
+}
+fn default_arming_timeout() -> u16 {
+    90
+}
+fn default_pending_timeout() -> u16 {
+    30
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+enum AlarmState {
+    Disarmed,
+    Armed,
+    Triggered,
 }
 
 #[derive(Debug)]

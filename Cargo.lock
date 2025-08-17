@@ -1801,6 +1801,7 @@ dependencies = [
  "log",
  "rusty-esp-alarm",
  "seq-macro",
+ "serde",
  "serde_json",
 ]
 

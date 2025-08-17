@@ -237,7 +237,7 @@ where
     ) -> Result<(), SettingsError<sequential_storage::Error<S::Error>>> {
         let mut ser = minicbor_serde::Serializer::new(BufWriter::new(buf));
         data.serialize(&mut ser)
-            .map_err(|e| SettingsError::SerializeError(e))?;
+            .map_err(SettingsError::SerializeError)?;
         let len = ser.encoder().writer().written_len;
         let val: &[u8] = &buf[..len];
         sequential_storage::map::store_item::<_, &[u8], _>(
@@ -295,6 +295,17 @@ where
         value: &'v V,
     ) -> Result<(), SettingsError<sequential_storage::Error<S::Error>>> {
         let fut = self.set(setting_key, value);
+        embassy_futures::block_on(fut)
+    }
+
+    /// Blocking version of [`set_serialized()`]
+    pub fn set_serialized_blocking<D: serde::Serialize>(
+        &mut self,
+        setting_key: &str,
+        data: &D,
+        buf: &mut [u8],
+    ) -> Result<(), SettingsError<sequential_storage::Error<S::Error>>> {
+        let fut = self.set_serialized(setting_key, data, buf);
         embassy_futures::block_on(fut)
     }
 }

@@ -3,6 +3,7 @@ use crate::AlarmEvent;
 use crate::AlarmState;
 use crate::StatusEvent;
 use esp_idf_svc::mqtt::client::{EspMqttClient, QoS};
+use esp_idf_svc::sys::esp_restart;
 use ha_types::*;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, Sender};
@@ -12,6 +13,7 @@ use std::sync::{Arc, Mutex};
 pub struct MqttSettings<'s> {
     pub availability_topic: &'s str,
     pub ota_topic: &'s str,
+    pub settings_topic_prefix: &'s str,
 }
 
 pub fn scheduler_task(
@@ -21,7 +23,8 @@ pub fn scheduler_task(
     _status_tx: Sender<StatusEvent>,
     alarm_event_queue: Arc<Mutex<VecDeque<AlarmEvent>>>,
     alarm_command_tx: Sender<AlarmCommand>,
-    settings: MqttSettings,
+    mqtt_settings: MqttSettings,
+    settings: Arc<Mutex<crate::settings::Settings>>,
 ) -> ! {
     let mut mqtt_client = None;
     loop {
@@ -30,6 +33,7 @@ pub fn scheduler_task(
             .command_topic
             .clone()
             .expect("Alarm entity has no command topic");
+        let settings_set_topic_prefix = format!("{}/set", mqtt_settings.settings_topic_prefix);
 
         let loop_result = || -> anyhow::Result<()> {
             loop {
@@ -42,13 +46,18 @@ pub fn scheduler_task(
                             log::info!("EthDisconnected");
                         }
                         StatusEvent::MqttConnected(mut client) => {
-                            init_mqtt(&mut client, motion_entities, &alarm_entity, settings)?;
+                            init_mqtt(&mut client, motion_entities, &alarm_entity, mqtt_settings)?;
                             mqtt_client = Some(client);
                             log::info!("MqttConnected");
                         }
                         StatusEvent::MqttReconnected => {
                             if let Some(mut client) = mqtt_client.take() {
-                                init_mqtt(&mut client, motion_entities, &alarm_entity, settings)?;
+                                init_mqtt(
+                                    &mut client,
+                                    motion_entities,
+                                    &alarm_entity,
+                                    mqtt_settings,
+                                )?;
                                 mqtt_client = Some(client);
                             } else {
                                 anyhow::bail!("MqttReconnected: mqtt client is None");
@@ -61,6 +70,54 @@ pub fn scheduler_task(
                         StatusEvent::MqttMessage(msg) => {
                             if msg.topic == alarm_entity_command_topic {
                                 handle_alarm_command(&msg.payload, &alarm_command_tx)?;
+                            } else if msg.topic == settings_set_topic_prefix {
+                                if let Some((key, val)) = msg.payload.split_once('\0') {
+                                    if key.len() > 32 {
+                                        anyhow::bail!(
+                                            "invalid settings set command: key too large: {} (32 at max)",
+                                            key.len()
+                                        );
+                                    }
+                                    log::info!("MQTT set setting {key} to {val}");
+                                    let mut settings = settings.lock().unwrap();
+                                    handle_set_setting(key, val.as_bytes(), &mut settings)?;
+                                }
+                            }
+                        }
+                        StatusEvent::MqttMessageRaw { topic, payload } => {
+                            if topic == settings_set_topic_prefix {
+                                if let Some((key, val)) = payload.split_once(|v| *v == 0) {
+                                    if key.len() > 32 {
+                                        anyhow::bail!(
+                                            "invalid settings set command: key too large: {} (32 at max)",
+                                            key.len()
+                                        );
+                                    }
+                                    let Ok(key) = str::from_utf8(key) else {
+                                        anyhow::bail!(
+                                            "invalid settings set command: key is not an UTF-8 string"
+                                        );
+                                    };
+                                    if let Ok(val) = str::from_utf8(val) {
+                                        log::info!("MQTT set setting {key} to {val}");
+                                    } else {
+                                        let len = val.len();
+                                        log::info!(
+                                            "MQTT set setting {key} to <binary of {len} byte(s)>"
+                                        );
+                                    }
+                                    let mut settings = settings.lock().unwrap();
+                                    handle_set_setting(key, val, &mut settings)?;
+                                } else {
+                                    anyhow::bail!(
+                                        "invalid settings set command: could not find a null byte that splits the key and value"
+                                    );
+                                }
+                            } else if let Some((_, key)) =
+                                topic.split_once(settings_set_topic_prefix.as_str())
+                            {
+                                let mut settings = settings.lock().unwrap();
+                                handle_set_setting(key, &payload, &mut settings)?;
                             }
                         }
                     },
@@ -123,10 +180,11 @@ fn init_mqtt(
     let MqttSettings {
         availability_topic,
         ota_topic,
+        settings_topic_prefix,
     } = mqtt_setings;
 
     // send entity config messages
-    for entity in entities.iter() {
+    for entity in entities.iter().chain([alarm_entity]) {
         let entity = HAEntity {
             availability: Some(HADeviceAvailability {
                 payload_available: Some("online".to_string()),
@@ -151,11 +209,6 @@ fn init_mqtt(
         }
     }
 
-    if let Some(command_topic) = alarm_entity.command_topic.as_ref() {
-        client.subscribe(command_topic, QoS::ExactlyOnce)?;
-        log::debug!("subscribed to alarm entity command topic: {command_topic}");
-    }
-
     // birth message
     client.publish(availability_topic, QoS::AtLeastOnce, true, b"online")?;
     log::debug!("sent birth message");
@@ -163,6 +216,10 @@ fn init_mqtt(
     // subscribe to ota
     client.subscribe(ota_topic, QoS::ExactlyOnce)?;
     log::debug!("subscribed to ota topic: {ota_topic}");
+
+    // subscribe to settings topics
+    client.subscribe(&format!("{settings_topic_prefix}/set"), QoS::ExactlyOnce)?;
+    log::debug!("subscribed to settings topics with prefix: {settings_topic_prefix}");
 
     Ok(())
 }
@@ -213,6 +270,9 @@ fn handle_alarm_command(
         "DISARM" => AlarmCommand::Disarm,
         "TRIGGER" => AlarmCommand::ManualTrigger,
         "UNTRIGGER" => AlarmCommand::Untrigger,
+        "REBOOT" => unsafe {
+            esp_restart();
+        },
         _ => {
             log::warn!("Unknown command: {payload}");
             return Ok(());
@@ -220,4 +280,14 @@ fn handle_alarm_command(
     };
     alarm_command_tx.send(command)?;
     Ok(())
+}
+
+fn handle_set_setting(
+    key: &str,
+    val: &[u8],
+    settings: &mut crate::settings::Settings,
+) -> anyhow::Result<()> {
+    settings
+        .set_blocking(key, &val)
+        .map_err(|e| anyhow::anyhow!("failed to set setting {key}: {e:?}"))
 }

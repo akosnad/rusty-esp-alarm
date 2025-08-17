@@ -229,17 +229,33 @@ fn handle_mqtt_message(
             return handle_ota_message(data, details, ota);
         }
 
-        let content = String::from_utf8(data.into())?;
-        if let Some(topic) = topic {
-            info!("MQTT Message on topic {topic}: {content}");
-            status_tx
-                .send(StatusEvent::MqttMessage(crate::MqttMessage {
-                    topic: String::from(topic),
-                    payload: content,
-                }))
-                .expect("Failed to send status event");
-        } else {
-            info!("MQTT Message: {content}");
+        match String::from_utf8(data.into()) {
+            Ok(content) => {
+                if let Some(topic) = topic {
+                    info!("MQTT Message on topic {topic}: {content}");
+                    status_tx
+                        .send(StatusEvent::MqttMessage(crate::MqttMessage {
+                            topic: String::from(topic),
+                            payload: content,
+                        }))
+                        .expect("Failed to send status event");
+                } else {
+                    info!("MQTT Message: {content}");
+                }
+            }
+            Err(_) => {
+                if let Some(topic) = topic {
+                    info!("MQTT binary message on topic {topic}");
+                    status_tx
+                        .send(StatusEvent::MqttMessageRaw {
+                            topic: String::from(topic),
+                            payload: Vec::from(data),
+                        })
+                        .expect("failed to send status event");
+                } else {
+                    info!("MQTT binary message received without topic");
+                }
+            }
         }
         Ok(())
     } else {
