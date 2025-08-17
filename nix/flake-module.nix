@@ -153,6 +153,15 @@ in
                   "$here"/${firmwarePackageName}
               '';
 
+            writeOtaBinary = # sh
+              ''
+                espflash save-image \
+                  --chip ${firmwareBoard} \
+                  --partition-table $out/partitions.csv \
+                  --bootloader $out/bootloader.bin \
+                  "$out/bin/${firmwarePackageName}" $out/ota.bin
+              '';
+
             installPhaseCommand = # sh
               ''
                 mkdir -p $out/bin
@@ -161,12 +170,14 @@ in
                 chmod +x $out/bin/flash.sh
                 cp target/"${firmwareTarget}"/release/{bootloader.bin,partition-table.bin} $out/
                 cp firmware/partitions.csv $out/
-                espflash save-image \
-                  --chip ${firmwareBoard} \
-                  --partition-table firmware/partitions.csv \
-                  --bootloader target/"${firmwareTarget}"/release/bootloader.bin \
-                  "$out/bin/${firmwarePackageName}" $out/ota.bin
               '';
+
+            fixupPhase = ''
+              runHook preFixup
+              runHook postFixup
+              # this is run last, otherwise OTA image checksums won't be correct if the file is patched afterwards
+              runHook writeOtaBinary
+            '';
           };
         };
       };
