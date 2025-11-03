@@ -131,7 +131,7 @@ fn main() -> anyhow::Result<()> {
             Some(pins.gpio5),
             Some(pins.gpio33),
             esp_idf_svc::eth::SpiEthChipset::W5500,
-            20.MHz().into(),
+            1.MHz().into(),
             Some(&mac_addr),
             None,
             sysloop.clone(),

@@ -70,9 +70,34 @@ async fn eth_task<T>(
     status_tx: mpsc::Sender<StatusEvent>,
     settings: &NetworkSettings,
 ) -> ! {
+    let status_tx_clone = status_tx.clone();
+    let settings_clone = settings.clone();
+    if let Err(e) = spawn_task(
+        move || {
+            let status_tx_task = status_tx_clone.clone();
+            let result = mqtt_task(
+                status_tx_task,
+                create_mqtt_client_config(settings_clone.availability_topic.clone().as_str()),
+                &settings_clone,
+            );
+            if let Err(e) = result {
+                log::error!("MQTT task failed: {e:?}");
+                status_tx_clone
+                    .send(StatusEvent::MqttDisconnected)
+                    .unwrap_or_else(|e| {
+                        info!("failed to send status: {e}");
+                    });
+            }
+        },
+        "mqtt\0",
+        Some(Core::Core0),
+    ) {
+        panic!("failed to start mqtt task: {e:?}");
+    }
+
     loop {
         eth.stop().await.unwrap_or_else(|e| {
-            info!("failed to stop ethernet: {e}");
+            log::error!("failed to stop ethernet: {e}");
         });
         info!("Starting Ethernet...");
         async {
@@ -91,9 +116,10 @@ async fn eth_task<T>(
             eth.start().await?;
 
             info!("Connecting network...");
-            while eth.wait_netif_up().await.is_err() {
+            if eth.wait_netif_up().await.is_err() {
                 info!("Failed to connect to network, retrying in 5 seconds...");
                 std::thread::sleep(Duration::from_secs(5));
+                anyhow::bail!("netif_up timed out");
             }
 
             status_tx
@@ -103,37 +129,11 @@ async fn eth_task<T>(
             info!("Connected to network");
 
             loop {
-                let status_tx = status_tx.clone();
-                let settings = settings.clone();
-                let mqtt_task_handle = spawn_task(
-                    move || {
-                        let status_tx_task = status_tx.clone();
-                        let result = mqtt_task(
-                            status_tx_task,
-                            create_mqtt_client_config(settings.availability_topic.clone().as_str()),
-                            &settings,
-                        );
-                        if let Err(e) = result {
-                            log::error!("MQTT task failed: {e:?}");
-                            status_tx
-                                .send(StatusEvent::MqttDisconnected)
-                                .unwrap_or_else(|e| {
-                                    info!("failed to send status: {e}");
-                                });
-                        }
-                    },
-                    "mqtt\0",
-                    Some(Core::Core0),
-                )?;
-
-                mqtt_task_handle.join().unwrap();
-
-                if !eth.is_connected()? {
-                    break;
+                match eth.wait_netif_up().await {
+                    Ok(_) => std::thread::sleep(Duration::from_secs(5)),
+                    Err(_) => anyhow::bail!("Ethernet disconnected"),
                 }
             }
-
-            anyhow::bail!("Ethernet disconnected");
         }
         .await
         .unwrap_or_else(|_e: anyhow::Error| {
@@ -162,8 +162,7 @@ fn mqtt_task(
     loop {
         match connection.next() {
             Err(e) => {
-                info!("MQTT Message ERROR: {e}");
-                break;
+                log::error!("MQTT Message ERROR: {e}");
             }
             Ok(msg) => {
                 let event = msg.payload();
@@ -200,8 +199,6 @@ fn mqtt_task(
             }
         }
     }
-
-    anyhow::bail!("MQTT disconnected");
 }
 
 fn handle_mqtt_message(
