@@ -266,7 +266,7 @@ fn handle_alarm_command(
 ) -> anyhow::Result<()> {
     let command = match payload.to_uppercase().as_str() {
         "ARM_AWAY" => AlarmCommand::Arm,
-        "ARM_CUSTOM_BYPASS" => AlarmCommand::ArmInstantly,
+        "ARM_INSTANT" => AlarmCommand::ArmInstantly,
         "DISARM" => AlarmCommand::Disarm,
         "PENDING" => AlarmCommand::ManualPending,
         "TRIGGER" => AlarmCommand::ManualTrigger,
