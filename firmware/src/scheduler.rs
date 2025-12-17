@@ -264,10 +264,11 @@ fn handle_alarm_command(
     payload: &str,
     alarm_command_tx: &Sender<AlarmCommand>,
 ) -> anyhow::Result<()> {
-    let command = match payload {
+    let command = match payload.to_uppercase().as_str() {
         "ARM_AWAY" => AlarmCommand::Arm,
         "ARM_CUSTOM_BYPASS" => AlarmCommand::ArmInstantly,
         "DISARM" => AlarmCommand::Disarm,
+        "PENDING" => AlarmCommand::ManualPending,
         "TRIGGER" => AlarmCommand::ManualTrigger,
         "UNTRIGGER" => AlarmCommand::Untrigger,
         "REBOOT" => unsafe {

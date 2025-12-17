@@ -35,6 +35,7 @@ pub enum AlarmCommand {
     Arm,
     ArmInstantly,
     Disarm,
+    ManualPending,
     ManualTrigger,
     Untrigger,
     UpdateSettings(AlarmSettings),
@@ -146,22 +147,25 @@ where
         match command_rx.try_recv() {
             Ok(command) => match command {
                 AlarmCommand::Arm => {
-                    if alarm_state == AlarmState::Disarmed {
+                    if matches!(alarm_state, AlarmState::Disarmed) {
                         alarm_state = AlarmState::Arming(Instant::now());
                     }
                 }
                 AlarmCommand::ArmInstantly => {
-                    if alarm_state == AlarmState::Disarmed {
+                    if matches!(alarm_state, AlarmState::Disarmed) {
                         alarm_state = AlarmState::Armed(Instant::now());
                     }
                 }
                 AlarmCommand::Disarm => {
                     alarm_state = AlarmState::Disarmed;
                 }
-                AlarmCommand::ManualTrigger => {
-                    if let AlarmState::Armed(_) = alarm_state {
-                        alarm_state = AlarmState::Triggered;
+                AlarmCommand::ManualPending => {
+                    if matches!(alarm_state, AlarmState::Armed(_)) {
+                        alarm_state = AlarmState::Pending(Instant::now());
                     }
+                }
+                AlarmCommand::ManualTrigger => {
+                    alarm_state = AlarmState::Triggered;
                 }
                 AlarmCommand::Untrigger => match alarm_state {
                     AlarmState::Triggered | AlarmState::Pending(_) => {
@@ -217,7 +221,7 @@ where
             }
         };
 
-        if alarm_state != AlarmState::Triggered {
+        if !matches!(alarm_state, AlarmState::Triggered) {
             siren_pin.set_low().unwrap_or_else(|e| {
                 log::error!("Failed to set siren pin low: {e:?}");
             });
